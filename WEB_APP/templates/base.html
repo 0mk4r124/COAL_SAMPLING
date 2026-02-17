@@ -1,0 +1,71 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% block title %}COAL SAMPLING{% endblock %}</title>
+
+    <link rel="stylesheet" href="{% static 'css/bootstrap.min.css' %}">
+    <link rel="stylesheet" href="{% static 'css/bootstrap-icons.css' %}">
+    <link rel="stylesheet" href="{% static 'css/fa-all.css' %}">
+    <link rel="stylesheet" href="{% static 'css/daterangepicker.css' %}" />
+
+    <!-- Finally, your custom styles LAST -->
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <link rel="icon" type="image/png" href="{% static 'logo/hindalco.png' %}">
+
+</head>
+
+<body class="bg-light">
+    
+    <!-- Header -->
+    <header class="bg-white shadow-sm p-3 d-flex align-items-center justify-content-between">
+        <img src="{% static 'logo/hindalco.png' %}" style="width: 7rem; height: 4rem;">
+        <h3 class="fw-bold text-center flex-grow-1">DRISHTI PORTAL - COAL SAMPLING</h3>
+        <div class="d-flex align-items-center position-relative">
+            <!-- Right Profile Dropdown -->
+            <div class="dropdown ms-auto">
+                <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" id="UserDropdown" data-bs-toggle="dropdown" aria-expanded="false"style="margin-right: 3rem;">
+                <img class="img-xs rounded-circle me-2" src="{% static 'logo/pic-4.png' %}" alt="Profile image" />
+                <span class="font-weight-normal">{{ username }}</span>
+                </a>
+                <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="UserDropdown">
+                <li>
+                    <a class="dropdown-item" href="{% url 'logout' %}">
+                    <i class="dropdown-item-icon icon-power text-primary"></i> Logout
+                    </a>
+                </li>
+                </ul>
+            </div>
+        </div>
+    </header>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        {% endfor %}
+    {% endif %}
+     
+    <div class="mt-4">
+        <main class="col-12 col-md-12 col-xl-12 px-md-4">
+            {% block content %}
+            {% endblock %}
+        </main>
+    </div>
+    
+    <!-- Offline Bootstrap JS -->
+    <!-- Offline Bootstrap JS -->
+    <script src="{% static 'js/jquery-3.6.4.min.js' %}"></script>
+    <script src="{% static 'js/moment/moment.min.js' %}"></script>
+    <script src="{% static 'js/bootstrap.bundle.min.js' %}"></script>
+    <script src="{% static 'js/daterangepicker/daterangepicker.js' %}"></script>
+    <script src="{% static 'js/bootstrap-datepicker/bootstrap-datepicker.min.js' %}"></script>
+    <script src="{% static 'js/chart.js' %}"></script>
+    
+    <!-- Finally, your custom scripts LAST -->
+    <script src="{% static 'js/script.js' %}"></script>
+
+</body>
+</html>
