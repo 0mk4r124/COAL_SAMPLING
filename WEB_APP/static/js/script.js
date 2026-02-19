@@ -282,9 +282,7 @@ document.addEventListener('click', function (e) {
     const btn = e.target.closest('.view-image-btn');
     if (!btn) return;
 
-    const loc = btn.dataset.loc;
     const vehicle_number = btn.dataset.vehicle_number;
-
     document.getElementById("vehicle_number").innerHTML = `Vehicle Number: <b>${vehicle_number}</b>`;
 
     const modal = new bootstrap.Modal(document.getElementById('imageModal'));
@@ -325,17 +323,10 @@ document.getElementById("imageModal")
 });
 
 document.addEventListener('click', function (e) {
-    const btn = e.target.closest('.view-image-btn');
+    const btn = e.target.closest('.view-vehicle-btn');
     if (!btn) return;
-
-    const loc = btn.dataset.loc;
-    const vehicle_number = btn.dataset.vehicle_number;
-
-    document.getElementById("vehicle_number").innerHTML = `Vehicle Number: <b>${vehicle_number}</b>`;
-
-    const modal = new bootstrap.Modal(document.getElementById('imageModal'));
+    const modal = new bootstrap.Modal(document.getElementById('vehicleDetailsModal'));
     modal.show();
-    document.getElementById("imageModal").dataset.src = imgSrc;
 });
 
 function updateSystemStatus() {
