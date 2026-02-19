@@ -31,9 +31,7 @@
         <div class="card shadow-sm">
             <div class="card-body">
 
-                <button type="button" class="btn btn-success btn-sm" onclick="openAddVehicleModal('RFID-123456')">
-                    Add Vehicle
-                </button>
+                <button class="btn btn-sm btn-primary view-vehicle-btn">Add Vehicle</button>
 
                 <!-- Images Row -->
                 <div class="row g-2 mb-3">
@@ -126,25 +124,19 @@
                                 <th>SNo.</th>
                                 <th>DATETIME</th>
                                 <th>VEHICLE NUMBER</th>
-                                <th>VENDOR CODE</th>
                                 <th>VENDOR NAME</th>
-                                <th>VIEW IMAGES</th>
+                                <th>VENDOR CODE</th>
+                                <th>VIEW IMAGE 1</th>
+                                <th>VIEW IMAGE 2</th>
+                                <th>VIEW IMAGE 3</th>
                                 <th>VIEW REPORT</th>
                             </tr>
                         </thead>
-                        <tbody id="HISTORY_body"></tbody>
+                        <tbody id="History_body"></tbody>
                     </table>
                 </div>
                 <div id="pagination-history" class="d-flex justify-content-between mt-3 py-2"></div>
             </div>
-
-            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="openImageCarouselModal([
-                        `{% static 'img/GROUP_1.jpg' %}`,
-                        `{% static 'img/GROUP_2.jpg' %}`,
-                        `{% static 'img/GROUP_3.jpg' %}`
-                    ])">
-                View Images
-            </button>
         </div>
     </div>
 
@@ -188,39 +180,32 @@
 
 </div>
 
-<!-- Image Corousal Modal -->
-<div class="modal fade" id="imageCarouselModal" tabindex="-1" aria-hidden="true">
+<!-- Image Modal -->
+<div class="modal fade" id="imageModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-xl modal-fullscreen-lg-down">
         <div class="modal-content">
-
             <div class="modal-header">
-                <h5 class="modal-title">Images Preview</h5>
+                <h5 class="modal-title" id="vehicle_number"></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-
             <div class="modal-body text-center">
-
-                <div id="zoomWrapper" class="position-relative"
-                    style="overflow:hidden; width:100%; min-height:60vh; cursor:grab;">
-
-                    <div id="carouselLoader" class="position-absolute top-50 start-50 translate-middle text-center"
+                <div id="zoomWrapper" class="position-relative" style="overflow:hidden; width:100%; min-height:60vh; cursor:grab;">
+                    <div id="imageLoader"
+                        class="position-absolute top-50 start-50 translate-middle text-center"
                         style="display:none; z-index:10;">
-                        <div class="spinner-border text-primary"></div>
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
                         <div class="mt-2">Loading image...</div>
                     </div>
-
-                    <!-- SINGLE image used by zoom logic -->
                     <img id="modalImage" src=""
                         style="user-select:none; -webkit-user-drag:none; transform-origin:center center;">
                 </div>
-
-                <!-- Carousel Controls -->
-                <div class="d-flex justify-content-between mt-3">
-                    <button class="btn btn-outline-secondary btn-sm" id="prevImageBtn">◀ Prev</button>
-                    <span id="carouselCounter" class="fw-bold"></span>
-                    <button class="btn btn-outline-secondary btn-sm" id="nextImageBtn">Next ▶</button>
+            </div>
+            <div class="modal-footer">
+                <div class="d-flex align-items-center w-100 justify-content-start">
+                    <p class="m-2 text-primary" id="updateImageBtn"><strong>Note :</strong> Use scroll to zoom in and zoom out.</p>
                 </div>
-
             </div>
         </div>
     </div>
@@ -228,36 +213,33 @@
 
 <!-- Add Vehicle Modal -->
 <div class="modal fade" id="vehicleDetailsModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-dialog modal-dialog-centered modal-xl modal-fullscreen-lg-down">
         <div class="modal-content">
-
             <div class="modal-header">
                 <h5 class="modal-title">Add Vehicle & Vendor</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
-
             <div class="modal-body">
                 <form id="vehicleDetailsForm">
-
                     <!-- RFID -->
                     <div class="mb-3">
                         <label class="form-label fw-bold">RFID</label>
                         <input type="text" class="form-control form-control-sm" id="rfidInput" disabled>
                     </div>
-
                     <!-- Vehicle Number -->
                     <div class="mb-3">
                         <label class="form-label fw-bold">Vehicle Number</label>
                         <input type="text" class="form-control form-control-lg" id="vehicleNumberInput"
                             placeholder="Enter vehicle number">
                     </div>
-
                     <!-- Vendor Name -->
                     <div class="mb-3">
                         <label class="form-label fw-bold">Vendor Name</label>
                         <input type="text" class="form-control form-control-lg" id="vendorNameInput"
                             placeholder="Enter vendor name">
                     </div>
+                    <!-- Vendor Code hidden -->
+                    <input type="hidden" id="vendorCode_hidden">
 
                 </form>
             </div>
