@@ -9,12 +9,12 @@
 
 body, html {
 	height: 100%;
-	font-family: sans-serif;
+	font-family: Ubuntu-Regular, sans-serif;
 }
 
 /*---------------------------------------------*/
 a {
-	font-family: sans-serif;
+	font-family: Ubuntu-Regular;
 	font-size: 14px;
 	line-height: 1.7;
 	color: #666666;
@@ -40,7 +40,7 @@ h1,h2,h3,h4,h5,h6 {
 }
 
 p {
-	font-family: sans-serif;
+	font-family: Ubuntu-Regular;
 	font-size: 14px;
 	line-height: 1.7;
 	color: #666666;
@@ -108,14 +108,14 @@ iframe {
 /*//////////////////////////////////////////////////////////////////
 [ Utility ]*/
 .txt1 {
-  font-family: sans-serif;
+  font-family: Ubuntu-Regular;
   font-size: 15px;
   color: #999999;
   line-height: 1.4;
 }
 
 .txt2 {
-  font-family: sans-serif;
+  font-family: Ubuntu-Regular;
   font-size: 15px;
   color: #57b846;
   line-height: 1.4;
@@ -389,7 +389,7 @@ iframe {
 /*//////////////////////////////////////////////////////////////////
 [ FONT ]*/
 
-/* @font-face {
+@font-face {
   font-family: Ubuntu-Regular;
   src: url('../fonts/ubuntu/Ubuntu-Regular.ttf'); 
 }
@@ -402,4 +402,4 @@ iframe {
 @font-face {
   font-family: JosefinSans-Bold;
   src: url('../fonts/JosefinSans/JosefinSans-Bold.ttf'); 
-} */
+}
