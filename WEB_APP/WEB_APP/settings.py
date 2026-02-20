@@ -79,7 +79,7 @@ WSGI_APPLICATION = 'WEB_APP.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'COAL_SAMPLING',
+        'NAME': 'COAL_SAMPLING_DHAR',
         'USER': 'root',  # Replace with your MySQL username
         'PASSWORD': 'insightzz@123',  # Replace with your MySQL password
         'HOST': 'localhost',

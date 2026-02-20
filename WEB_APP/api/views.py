@@ -98,6 +98,8 @@ def fetch_history_data(request):
             "bunch_name": row["bunch_number"],
             "capture_time": row["capture_time"].strftime("%Y-%m-%d %H:%M:%S"),
             "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
+            "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
+            "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
         })
 
     return JsonResponse({

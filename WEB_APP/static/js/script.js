@@ -137,16 +137,16 @@ function populateTable(data, table_name) {
         data.forEach(row => {
             const tr = document.createElement('tr');
             const Img1Button = row.img_1_path
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.view_image}">Image View</button>`
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.img_1_path}">Image View</button>`
                 : "";
             const Img2Button = row.img_2_path
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.view_image}">Image View</button>`
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.img_2_path}">Image View</button>`
                 : "";
             const Img3Button = row.img_3_path
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.view_image}">Image View</button>`
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.img_3_path}">Image View</button>`
                 : "";
-            const ReportButton = row.img_3_path
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.view_image}">Image View</button>`
+            const ReportButton = row.report_path
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.report_path}">Report View</button>`
                 : "";
 
             tr.innerHTML = `
