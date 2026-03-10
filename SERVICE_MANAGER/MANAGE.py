@@ -10,25 +10,26 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QProcess, QTimer
 from PyQt5.QtGui import QFont
 
-# BASE_FILE_PATH = r"D:\INSIGHTZZ\PROJECTS\STANDARD_TEMPLATE\DJANGO_SCRIPTS_FRAMEWORK\STANDARD_FRAMEWORK\\"
-# SERVICES = {
-#     "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
-#     "Frame Capture": fr"{BASE_FILE_PATH}SCRIPTS\FRAME_CAPTURE.py",
-#     "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
-#     "Django": fr"{BASE_FILE_PATH}WEB_APP\manage.py runserver"
-# }
-# PYTHON_EXE = r"C:\Users\ADMIN\miniconda3\envs\detectron2\python.exe"
-# CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
-
-BASE_FILE_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/STANDARD_TEMPLATE/DJANGO_SCRIPTS_FRAMEWORK/STANDARD_FRAMEWORK/"
+BASE_FILE_PATH = r"c:\Users\COAL_SAMPLING_1\PRODUCTION_CODE\COAL_SAMPLING\\"
 SERVICES = {
-    # "PLC": f"{BASE_FILE_PATH}SCRIPTS/PLC_COMM.py",
-    # "Frame Capture": f"{BASE_FILE_PATH}SCRIPTS/FRAME_CAPTURE.py",
-    "Logic": f"{BASE_FILE_PATH}SCRIPTS/LOGIC.py",
-    "Django": f"{BASE_FILE_PATH}WEB_APP/manage.py runserver"
+    # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
+    "Frame Capture": fr"{BASE_FILE_PATH}SCRIPTS\IP_CAPTURE.py",
+    "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\RFID_CODE.py",
+    # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
+    # "Django": fr"{BASE_FILE_PATH}WEB_APP\manage.py runserver"
 }
-PYTHON_EXE = "/home/omkar/INSIGHTZZ/PROJECTS/STANDARD_TEMPLATE/DJANGO_SCRIPTS_FRAMEWORK/venv/bin/python"
-CHROME_PATH = "/usr/bin/google-chrome"  # Adjust if different
+PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
+CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
+
+# BASE_FILE_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/STANDARD_TEMPLATE/DJANGO_SCRIPTS_FRAMEWORK/STANDARD_FRAMEWORK/"
+# SERVICES = {
+#     # "PLC": f"{BASE_FILE_PATH}SCRIPTS/PLC_COMM.py",
+#     # "Frame Capture": f"{BASE_FILE_PATH}SCRIPTS/FRAME_CAPTURE.py",
+#     "Logic": f"{BASE_FILE_PATH}SCRIPTS/LOGIC.py",
+#     "Django": f"{BASE_FILE_PATH}WEB_APP/manage.py runserver"
+# }
+# PYTHON_EXE = "/home/omkar/INSIGHTZZ/PROJECTS/STANDARD_TEMPLATE/DJANGO_SCRIPTS_FRAMEWORK/venv/bin/python"
+# CHROME_PATH = "/usr/bin/google-chrome"  # Adjust if different
 
 
 def set_status_color(label: QLabel, status: str):
@@ -140,7 +141,10 @@ class ServiceTab(QWidget):
         self.process.started.connect(self.process_started)
 
         # Build args safely using shlex.split
-        args = ["-u"] + shlex.split(self.command)
+        if self.command.endswith(".py"):
+            args = ["-u", self.command]
+        else:
+            args = ["-u"] + shlex.split(self.command)
 
         # For Django, set working dir to project root
         if "Django" in self.name:

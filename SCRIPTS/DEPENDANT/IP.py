@@ -76,7 +76,6 @@ class IPCamera:
                     cv2.imwrite(filename, img)
             return img
 
-
         except Exception as e:
             print(f"IPCamera capture error: {e}")
             print(traceback.format_exc())
