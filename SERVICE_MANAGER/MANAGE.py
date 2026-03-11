@@ -10,13 +10,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QProcess, QTimer
 from PyQt5.QtGui import QFont
 
-BASE_FILE_PATH = r"c:\Users\COAL_SAMPLING_1\PRODUCTION_CODE\COAL_SAMPLING\\"
+BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
 SERVICES = {
     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
-    "Frame Capture": fr"{BASE_FILE_PATH}SCRIPTS\IP_CAPTURE.py",
-    "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\RFID_CODE.py",
+    "Frame Capture": fr"{BASE_FILE_PATH}SCRIPTS\\IP_CAPTURE.py",
+    "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_CODE.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
-    "Django": fr"{BASE_FILE_PATH}WEB_APP\manage.py runserver 0.0.0.0:8080"
+    "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
 }
 PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different

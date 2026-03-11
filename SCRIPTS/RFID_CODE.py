@@ -54,6 +54,7 @@ def main():
     session_uid = None
     session_start = None
     rfids = set()
+    first = False
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 
@@ -81,6 +82,7 @@ def main():
                         session_start = time.time()
                         session_active = True
                         rfids = set()
+                        first = True
 
                         print("SESSION START:", session_uid)
                         mq.publish(
@@ -124,6 +126,10 @@ def main():
                             "uid": session_uid
                         }
                     )
+
+                    if first: 
+                        save_RFIDs(session_uid, rfids)
+                        first = False
 
                 # after 5 minutes stop session
                 if elapsed > 300:
