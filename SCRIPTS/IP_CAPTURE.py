@@ -2,106 +2,95 @@ import time
 import os
 import cv2
 
-from datetime import datetime
-
 from DEPENDANT.IP import IPCamera
 from DEPENDANT.MQTT import MQTT
 
 
+SAVE_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
+config_cam_1 = {
+    "ip": "192.168.1.201",
+    "user": "admin",
+    "password": "insightzz@123",
+    "name": "CAM1"
+}
+
+config_cam_2 = {
+    "ip": "192.168.1.202",
+    "user": "admin",
+    "password": "insightzz@123",
+    "name": "CAM2"
+}
+
+config_cam_3 = {
+    "ip": "192.168.1.203",
+    "user": "admin",
+    "password": "insightzz@123",
+    "name": "CAM3"
+}
+
+
+def save_frame(img, uid, cam):
+
+    path = os.path.join(SAVE_PATH, uid, cam)
+
+    os.makedirs(path, exist_ok=True)
+
+    filename = os.path.join(
+        path,
+        f"{cam}_{int(time.time()*1000)}.jpg"
+    )
+
+    cv2.imwrite(filename, img)
+
+
 def main():
 
-    save_path = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
     print("INIT CAMS")
 
-    cam_trigger = MQTT("RFID_CAM")
+    mqtt = MQTT("CAM_CONTROLLER")
+    mqtt.subscribe("rfid/session")
+    stage = None
+    uid = None
 
-    loc, trigger, uid = "RFID", "INACTIVE", "TEMP"
-    cam_trigger.subscribe("rfid/trigger") 
+    cam1 = IPCamera(config_cam_1)
+    cam2 = IPCamera(config_cam_2)
+    cam3 = IPCamera(config_cam_3)
 
-    config_cam_1 = {
-        "ip": "192.168.1.201",
-        "user": "admin",
-        "password": "insightzz@123",
-        "save_path": f"{save_path}CAM1/",
-        "name": "CAM1"
-    }
+    cams = [cam1, cam2, cam3]
 
-    config_cam_2 = {
-        "ip": "192.168.1.202",
-        "user": "admin",
-        "password": "insightzz@123",
-        "save_path": f"{save_path}CAM2/",
-        "name": "CAM2"
-    }
+    for cam in cams:
+        cam.initialize()
 
-    config_cam_3 = {
-        "ip": "192.168.1.203",
-        "user": "admin",
-        "password": "insightzz@123",
-        "save_path": f"{save_path}CAM3/",
-        "name": "CAM3"
-    }
-
-    ipcam1 = IPCamera(config_cam_1)
-    ipcam2 = IPCamera(config_cam_2)
-    ipcam3 = IPCamera(config_cam_3)
-
-    print("ADDING WORKING CAMS")
-
-    list_of_cams = [ipcam1, ipcam2, ipcam3]
-    working_cams = []
-
-    for ipcam in list_of_cams:
-        if ipcam.initialize():
-            working_cams.append(ipcam)
-
-    print(f"WORKING CAMS: {working_cams}")
+    print("CAMERAS READY")
 
     while True:
 
-        print(f"CYCLE : {datetime.now()}")
-        # time.sleep(8)
-
         try:
-            data = cam_trigger.data
+
+            data = mqtt.data
             if data:
-                loc = data["loc"]
-                trigger = data["trigger"]
+                stage = data["stage"]
                 uid = data["uid"]
-        except Exception as e:
-            print("MQTT read error:", e)
+                print("STAGE:", stage, uid)
 
-        if trigger == "ACTIVE":
+        except Exception: pass
 
-            print(f"RFID TRIGGERED: {uid}")
-            trigger = "INACTIVE"
-            t1 = datetime.now()
+        if stage == "cam2":
 
-            while (datetime.now() - t1).total_seconds() < 10:
+            img = cam2.capture()
+            if img is not None: save_frame(img, uid, "CAM2")
 
-                for ipcam in working_cams:
-                    try:
-                        img = ipcam.capture()
+        elif stage == "cam13":
 
-                        if img is None:
-                            continue
+            for cam in [cam1, cam3]:
+                img = cam.capture()
+                if img is not None: save_frame(img, uid, cam.config["name"])
 
-                        temp_path = f"{save_path}{loc}/{uid}/{ipcam.config['name']}"
-                        os.makedirs(temp_path, exist_ok=True)
+        elif stage == "end":
+            stage = None
+            uid = None
 
-                        filename = os.path.join(
-                            temp_path,
-                            f"{ipcam.config['name']}_{int(time.time()*1000)}.jpg"
-                        )
-
-                        cv2.imwrite(filename, img)
-
-                    except Exception as e:
-                        print("COULDNT CAPTURE:", e)
-
-    for ipcam in list_of_cams:
-        ipcam.deinitialize()
-
+        time.sleep(0.05)
 
 if __name__ == "__main__":
     main()
