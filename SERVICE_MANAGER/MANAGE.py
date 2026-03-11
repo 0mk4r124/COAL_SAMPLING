@@ -16,7 +16,7 @@ SERVICES = {
     "Frame Capture": fr"{BASE_FILE_PATH}SCRIPTS\IP_CAPTURE.py",
     "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\RFID_CODE.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
-    # "Django": fr"{BASE_FILE_PATH}WEB_APP\manage.py runserver"
+    "Django": fr"{BASE_FILE_PATH}WEB_APP\manage.py runserver 0.0.0.0:8080"
 }
 PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different

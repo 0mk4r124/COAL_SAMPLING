@@ -16,7 +16,7 @@ class VEHICLE_LOGS(models.Model):
         managed = True
         db_table = 'VEHICLE_LOGS'
         indexes = [
-            models.Index(fields=["rfid"], name="vl_rfid_idx"),
+            models.Index(fields=["rfids"], name="vl_rfid_idx"),
             models.Index(fields=["create_time"], name="vl_create_time_idx"),
         ]
 
