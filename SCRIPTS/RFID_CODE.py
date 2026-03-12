@@ -16,12 +16,12 @@ db_pass = "insightzz@123"
 db_host = "127.0.0.1"
 db_name = "COAL_SAMPLING_DHAR"
 
-def getdbConn(logger):
+def getdbConn():
     db = None
     try:
         db = pymysql.connect(host=db_host, user=db_user, passwd=db_pass, db=db_name)
     except Exception as e:
-        logger.error(f"SQLClass() Exception is: {e}")
+        print(f"SQLClass() Exception is: {e}")
     return db
 
 def save_RFIDs(uid, rfids):
@@ -35,7 +35,7 @@ def save_RFIDs(uid, rfids):
         
         cur = dbConnection.cursor()
         query = """INSERT INTO VEHICLE_LOGS 
-            (UID, RFIDS, IMG_1_PATH, IMG_2_PATH, IMG_3_PATH, CAPTURE_TIME) 
+            (UID, RFIDS, IMG_1_PATH, IMG_2_PATH, IMG_3_PATH, CREATE_TIME) 
             VALUES (%s, %s, %s, %s, %s, %s)"""
         cur.execute(query, (uid, "|".join(rfids), f"{SAVE_PATH}{uid}/CAM1/", f"{SAVE_PATH}{uid}/CAM2/", f"{SAVE_PATH}{uid}/CAM3/", datetime.now()))
         dbConnection.commit()
@@ -54,6 +54,7 @@ def main():
     session_uid = None
     session_start = None
     rfids = set()
+    first = False
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 
@@ -66,7 +67,7 @@ def main():
         while True:
 
             try:
-
+                print(f"TIME : {time.time()}")
                 data = s.recv(BUFFER_SIZE)
 
                 if data:
@@ -81,6 +82,7 @@ def main():
                         session_start = time.time()
                         session_active = True
                         rfids = set()
+                        first = True
 
                         print("SESSION START:", session_uid)
                         mq.publish(
@@ -100,6 +102,8 @@ def main():
                     #         "rfid": rfid
                     #     }
                     # )
+                else:
+                    time.sleep(5)
 
             except socket.timeout:
                 pass
@@ -125,8 +129,12 @@ def main():
                         }
                     )
 
+                    if first: 
+                        save_RFIDs(session_uid, rfids)
+                        first = False
+
                 # after 5 minutes stop session
-                if elapsed > 300:
+                if elapsed > 300 and elapsed < 310:
 
                     print("SESSION END")
 
