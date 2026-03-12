@@ -8,6 +8,7 @@ class VEHICLE_LOGS(models.Model):
     img_1_path = models.CharField(db_column='IMG_1_PATH', max_length=500, blank=True, null=True)
     img_2_path = models.CharField(db_column='IMG_2_PATH', max_length=500, blank=True, null=True)
     img_3_path = models.CharField(db_column='IMG_3_PATH', max_length=500, blank=True, null=True)
+    status = models.CharField(db_column='STATUS', max_length=20, blank=True, null=True)
     
     create_time = models.DateTimeField(db_column='CREATE_TIME', blank=True, null=True)
     update_time = models.DateTimeField(db_column='UPDATE_TIME', blank=True, null=True)
@@ -25,6 +26,7 @@ class VEHICLE_MASTER(models.Model):
     rfid = models.CharField(db_column='RFID', max_length=100, blank=True, null=True)
     vehicle_number = models.CharField(db_column='VEHICLE_NUMBER', max_length=50, blank=True, null=True)
     vendor_code = models.CharField(db_column='VENDOR_CODE', max_length=50, blank=True, null=True)
+    bucket_no = models.CharField(db_column='BUCKET_NO', max_length=50, blank=True, null=True)
     
     create_time = models.DateTimeField(db_column='CREATE_TIME', blank=True, null=True)
 
