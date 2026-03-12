@@ -66,7 +66,8 @@ def main():
     while True:
 
         try:
-
+            
+            print(f"TIME : {time.time()}")
             data = mqtt.data
             if data:
                 stage = data["stage"]
@@ -89,6 +90,7 @@ def main():
         elif stage == "end":
             stage = None
             uid = None
+            time.sleep(5)
 
         time.sleep(0.05)
 
