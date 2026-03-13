@@ -118,7 +118,6 @@ class PLCCOMMINCATION:
                     print("PLC not connected")
         except Exception as e:
             print("writeBoolToPLC() Exception is : "+ str(e))
-            print("writeBoolToPLC() Exception is : "+ str(e))
 
     def writeIntToPLC(self, clientConn, db_col_start_buffer_pos , int_value):
         try:
