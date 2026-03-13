@@ -81,14 +81,35 @@ def serve_file(request):
 
 @csrf_exempt
 def fetch_history_data(request):
-    bunch_id = request.GET.get('bunch_id')
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    
+    vehicle_number = request.GET.get('vehicle_number')
+    vendor_name = request.GET.get('vendor_name')
 
-    queryset = (
-        VEHICLE_LOGS.objects.filter(
+    try:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    except:
+        return JsonResponse({'error': 'Invalid date format'}, status=400)
+
+    queryset = VEHICLE_LOGS.objects.filter(
+            create_time__date__gte=start_dt,
+            create_time__date__lte=end_dt,
+        ).annotate(
+
+        ).order_by(
+            "create_time"
         )
-        .values()
-        .order_by("capture_time")
-    )
+    
+    if vehicle_number:
+        queryset = queryset.filter(
+            vehicle_number__icontains = vehicle_number,
+        )
+    if vendor_name:
+        queryset = queryset.filter(
+            vendor_name__icontains = vendor_name,
+        )
 
     results = []
     for idx, row in enumerate(queryset, start=1):
@@ -96,7 +117,7 @@ def fetch_history_data(request):
             "sno": idx,
             "anode_number": row["anode_number"],
             "bunch_name": row["bunch_number"],
-            "capture_time": row["capture_time"].strftime("%Y-%m-%d %H:%M:%S"),
+            "capture_time": row["create_time"].strftime("%Y-%m-%d %H:%M:%S"),
             "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
             "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
             "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
@@ -104,7 +125,66 @@ def fetch_history_data(request):
 
     return JsonResponse({
         "data": results,
-        "bunch_id": bunch_id,
+        "vehicle_number": vehicle_number,
+        "vendor_name": vendor_name,
+    })
+
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def check_for_vehicle(request):
+    status = "new"
+    vehicle_number = ""
+    vendor_name = ""
+    rfid_value = ""
+
+    current_vehicle = VEHICLE_LOGS.objects.filter(status="INPROGRESS").first()
+
+    if current_vehicle:
+        rfids = (current_vehicle.rfids or "").split("|")
+
+        for rfid in rfids:
+            vehicle = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
+
+            if vehicle:
+                vendor = VENDOR_MASTER.objects.filter(
+                    vendor_code=vehicle.vendor_code
+                ).first()
+
+                status = "present"
+                vehicle_number = vehicle.vehicle_number
+                vendor_name = vendor.vendor_name if vendor else ""
+                rfid_value = rfid
+                break
+
+    else:
+        current_vehicle = VEHICLE_LOGS.objects.order_by("-create_time").first()
+        status = "present"
+        vehicle_number = "NOT_FOUND"
+        vendor_name = "NOT_FOUND"
+
+        if current_vehicle:
+            rfids = (current_vehicle.rfids or "").split("|")
+
+            for rfid in rfids:
+                vehicle = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
+
+                if vehicle:
+                    vendor = VENDOR_MASTER.objects.filter(
+                        vendor_code=vehicle.vendor_code
+                    ).first()
+
+                    status = "present"
+                    vehicle_number = vehicle.vehicle_number if vehicle else "NOT_FOUND"
+                    vendor_name = vendor.vendor_name if vendor else "NOT_FOUND"
+                    break
+
+    return JsonResponse({
+        "status": status,
+        "vehicle_number": vehicle_number,
+        "vendor_name": vendor_name,
+        "rfid": rfid_value,
     })
 
 @csrf_exempt
