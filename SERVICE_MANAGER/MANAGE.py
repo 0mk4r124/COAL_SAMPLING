@@ -13,9 +13,13 @@ from PyQt5.QtGui import QFont
 BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
 SERVICES = {
     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
+    "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS\\CAM_CAPTURE.py",
+    "Logic": fr"{BASE_FILE_PATH}SCRIPTS\\MAIN_MANAGER.py",
+    "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_BARRIER.py",
+    "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_SAMPLER.py",
+    "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
     "Video Streamer": fr"{BASE_FILE_PATH}SCRIPTS\\VIDEO_STREAMER.py",
-    "Frame Capture": fr"{BASE_FILE_PATH}SCRIPTS\\IP_CAPTURE.py",
-    "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_CODE.py",
+    "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
     "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
 }

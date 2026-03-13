@@ -7,7 +7,7 @@ from snap7 import util
 
 MAX_RETRY_ATTEMPTS = 3
 
-class PLCCommunication:
+class PLCCOMMINCATION:
     def __init__(self, plcIPAddress, dbReadNumber, dbWriteNumber, dbReadStr):
         self.PLC_IP_ADDRESS = plcIPAddress 
         self.DB_READ_NUMBER = dbReadNumber 
@@ -29,7 +29,6 @@ class PLCCommunication:
         try:
             clientConn.get_connected()
             isConnected = True
-            print("PLC CONNECT")
         except Exception as e:
             print("isPLCConnected() Exception is : "+ str(e))
             isConnected = False
@@ -49,7 +48,6 @@ class PLCCommunication:
             if self.isPLCConnected(clientConn) is True:
                 db = clientConn.db_read(self.DB_READ_NUMBER, db_col_start_buffer_pos, 2) 
                 row_data = util.get_int(db, 0)
-                print("readIntFromPLC",row_data)
             else:
                 print("PLC not connected")
         except Exception as e:
@@ -96,7 +94,6 @@ class PLCCommunication:
                 if self.isPLCConnected(clientConn) is True:
                     db = clientConn.db_read(self.DB_READ_STR_NUMBER, db_col_start_buffer_pos, 14)
                     row_data = db[2:].decode("utf-8")
-                    print(f"Read String value: {row_data}")
                 else:
                     print("PLC isPLCConnected(clientConn) is False ")
                     print("PLC not connected")
@@ -146,7 +143,6 @@ class PLCCommunication:
         except Exception as e:
             time.sleep(0.2)
             print("writeDoubleToPLC() Exception is : "+ str(e))
-            print("writeDoubleToPLC() Exception is : "+ str(e))
 
     def writeStringToPLC(self, clientConn, db_col_start_buffer_pos,string_value):
         try:
@@ -193,5 +189,8 @@ class PLCCommunication:
     #         time.sleep(1)
 
     #     except: pass
+
+
+    # C80700329382001C177F
     
     
