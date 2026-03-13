@@ -9,19 +9,22 @@ DB_READ  = 10
 DB_WRITE = 11
 
 BOOM_BARRIER_OPEN = 0
-BOOM_BARRIER_CLOSE = 1
-TRUN_TABLE_COUNT = 2
-TRUN_TABLE_CLOCKWISE = 3
-TRUN_TABLE_VALUE_WRITE = 4
-GREEN_SIGNAL = 5
-RED_SIGNAL = 6
+BOOM_BARRIER_CLOSE = 2
+TRUN_TABLE_COUNT = 4
+TRUN_TABLE_CLOCKWISE = 6
+TRUN_TABLE_VALUE_WRITE = 8
+GREEN_SIGNAL = 10
+RED_SIGNAL = 12
 
 TRUCK_PRESENT1 = 0
-TRUCK_PRESENT2 = 0
+TRUCK_PRESENT2 = 2
 BOOM_BARRIER_OPEN_FB = 4
 BOOM_BARRIER_CLOSE_FB = 6
+TRUN_TABLE_HOME_P = 16
+TRUN_TABLE_COUNT_READ = 30
 
-BARRIER_OPEN_TIMEOUT = 15
+BARRIER_OPEN_TIMEOUT = 10
+SET_BUCKET_TIMEOUT = 10
 
 TOPIC_IN  = "manager/plc_barrier"
 TOPIC_OUT = "plc_barrier/status"
@@ -40,15 +43,15 @@ class BarrierController:
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_CLOSE, 0)
 
             # Poll status bit until confirmed or timeout
-            deadline = time.time() + BARRIER_OPEN_TIMEOUT
-            while time.time() < deadline:
-                open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
-                close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
-                if (open_bit == 1) and (close_bit == 0):
-                    print("[PLC_BARRIER] Barrier OPEN confirmed.")
-                    self.mqtt.publish(TOPIC_OUT, {"status": "barrier_opened"})
-                    return
-                time.sleep(0.5)
+            # deadline = time.time() + BARRIER_OPEN_TIMEOUT
+            # while time.time() < deadline:
+            #     open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
+            #     close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
+            #     if (open_bit == 1) and (close_bit == 0):
+            #         print("[PLC_BARRIER] Barrier OPEN confirmed.")
+            #         self.mqtt.publish(TOPIC_OUT, {"status": "barrier_opened"})
+            #         return
+            #     time.sleep(0.5)
 
             raise TimeoutError("Barrier did not open within timeout.")
 
@@ -65,15 +68,16 @@ class BarrierController:
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_CLOSE, 1)
             print("[PLC_BARRIER] Barrier CLOSE command sent.")
 
-            deadline = time.time() + BARRIER_OPEN_TIMEOUT
-            while time.time() < deadline:
-                open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
-                close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
-                if (open_bit == 0) and (close_bit == 1):
-                    print("[PLC_BARRIER] Barrier OPEN confirmed.")
-                    self.mqtt.publish(TOPIC_OUT, {"status": "barrier_opened"})
-                    return
-                time.sleep(0.5)
+            # deadline = time.time() + BARRIER_OPEN_TIMEOUT
+            # while time.time() < deadline:
+            #     open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
+            #     close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
+            #     if (open_bit == 0) and (close_bit == 1):
+            #         print("[PLC_BARRIER] Barrier OPEN confirmed.")
+            #         self.mqtt.publish(TOPIC_OUT, {"status": "barrier_opened"})
+            #         return
+            #     time.sleep(0.5)
+
             self.mqtt.publish(TOPIC_OUT, {"status": "barrier_closed"})
         except Exception as e:
             msg = f"close_barrier error: {e}"
@@ -102,6 +106,36 @@ class BarrierController:
             print(f"[PLC_BARRIER] {msg}")
             self.mqtt.publish(TOPIC_OUT, {"status": "signal_error", "msg": msg})
 
+    def set_bucket(self, bucket_number):
+        try:
+            
+            print("[PLC_BARRIER] Red Signal …")
+            self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 1)
+
+            while True:
+                home_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_HOME_P)
+                if home_bit == 1:
+                    self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 0)
+                    time.sleep(1)
+                    break
+                else: self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 1)
+
+                time.sleep(0.5)
+                
+            self.plc.writeIntToPLC(self.client, TRUN_TABLE_VALUE_WRITE, bucket_number)
+            self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 1)
+
+            while True:
+                bucket_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_COUNT_READ)
+                if bucket_bit == bucket_number: 
+                    self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 0)
+                    break
+
+        except Exception as e:
+            msg = f"Green Signal error: {e}"
+            print(f"[PLC_BARRIER] {msg}")
+            self.mqtt.publish(TOPIC_OUT, {"status": "signal_error", "msg": msg})
+
     def truck_present(self):
         present = False
         try:
@@ -116,7 +150,6 @@ class BarrierController:
             print(f"[PLC_BARRIER] Loop error: {e}")
 
         return present
-
 
     def run(self):
         self.mqtt.subscribe(TOPIC_IN)

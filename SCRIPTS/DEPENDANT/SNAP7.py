@@ -114,6 +114,7 @@ class PLCCOMMINCATION:
                     data = bytearray(1)
                     util.set_bool(data, 0, 0, bool_value)
                     clientConn.db_write(self.DB_WRITE_NUMBER, db_col_start_buffer_pos, data)
+                    break
                 else:
                     print("PLC not connected")
         except Exception as e:
