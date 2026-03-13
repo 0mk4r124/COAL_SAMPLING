@@ -34,44 +34,46 @@
         <div class="card shadow-sm">
             <div class="card-body">
 
-                <button class="btn btn-sm btn-primary view-vehicle-btn">Add Vehicle</button>
-
                 <!-- Images Row -->
                 <div class="row g-2 mb-3">
-                    <div class="col-6 text-center">
-                        <img src="{% static 'img/nocam.jpg' %}"
-                                alt="Image 1"
-                                class="img-fluid rounded border"
-                                style="max-height: 400px; object-fit: contain;">
+                    <div class="col-4 text-center border border-3 rounded">
+                        <img id="hikCam1"
+                            src="{% static 'img/nocam.jpg' %}"
+                            alt="Image 1"
+                            class="img-fluid rounded border"
+                            style="max-height: 350px; object-fit: contain;">
                     </div>
             
-                    <div class="col-6 text-center">
-                        <img src="{% static 'img/nocam.jpg' %}"
-                                alt="Image 2"
-                                class="img-fluid rounded border"
-                                style="max-height: 400px; object-fit: contain;">
+                    <div class="col-4 text-center border border-3 rounded">
+                        <img id="hikCam2"
+                            src="{% static 'img/nocam.jpg' %}"
+                            alt="Image 2"
+                            class="img-fluid rounded border"
+                            style="max-height: 350px; object-fit: contain;">
+                    </div>
+
+                    <div class="col-4 text-center border border-3 rounded">
+                        <div class=".flex-column fw-bold fs-1">
+                            <div><span class="text-danger fs-4">Vendor Name</span></div> 
+                            <div><span class="text-primary" id="vendorName">ABC Traders</span></div> 
+                        </div>
+                        <div class=".flex-column fw-bold fs-1">
+                            <div><span class="text-danger fs-4">Vehicle Number</span></div> 
+                            <div><span class="text-primary" id="vehicleNumber">MH 12 AB 1234</span></div> 
+                        </div>
                     </div>
                 </div>
 
                 <div class="row g-2 mb-3">
-                    <div class="col-6 text-center">
-                        <img src="{% static 'img/nocam.jpg' %}"
-                                alt="Image 1"
-                                class="img-fluid rounded border"
-                                style="max-height: 400px; object-fit: contain;">
+                    <div class="col-4 text-center border border-3 rounded">
+                        <img id="hikCam3"
+                            src="{% static 'img/nocam.jpg' %}"
+                            alt="Image 3"
+                            class="img-fluid rounded border"
+                            style="max-height: 350px; object-fit: contain;">
                     </div>
             
-                    <div class="col-6 text-center">
-                    </div>
-                </div>
-            
-                <!-- Details -->
-                <div class="text-center">
-                    <div class="fw-bold fs-1">
-                        Vendor Name: <span class="text-primary" id="vendorName">ABC Traders</span>
-                    </div>
-                    <div class="fw-bold fs-1">
-                        Vehicle Number: <span class="text-success" id="vehicleNumber">MH12AB1234</span>
+                    <div class="col-4 text-center">
                     </div>
                 </div>
 
@@ -79,7 +81,67 @@
         </div>
     </div>
 
-    <!-- HUH Tab -->
+    <!-- History Tab -->
+    <div class="tab-pane fade show" id="VEHICLE">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <!-- Filters -->
+                <div class="row g-3 align-items-end mb-3">
+
+                    <!-- Search Vehicle Number -->
+                    <div class="col-md-3 d-flex align-items-start">
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text h-100"><i class="fas fa-search"></i></span>
+                            </div>
+                            <input type="text" id="vehicle_num_search" name="vehicle_num_search"
+                                class="form-control" placeholder="Search Vehicle Number" autocomplete="off">
+                        </div>
+                    </div>
+
+                    <!-- Search Vendor Name -->
+                    <div class="col-md-3 d-flex align-items-start">
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text h-100"><i class="fas fa-search"></i></span>
+                            </div>
+                            <input type="text" id="vendor_name_search" name="vendor_name_search"
+                                class="form-control" placeholder="Search Vendor Name" autocomplete="off">
+                        </div>
+                    </div>
+
+                    <div class="col-md-4 d-flex align-items-start row">
+                        <div class="col-md-6 d-flex align-items-center">
+                            <button class="btn btn-success mx-2 w-30" onclick="fetchVehicleData()">Fetch Data</button>
+                        </div>
+                        <div class="col-md-6 d-flex align-items-center">
+                            <button class="btn btn-success mx-2 w-30" >Download Data</button> <!-- onclick="fetchHISTORYData()" -->
+                        </div>
+                    </div>
+                </div>
+
+
+                <!-- HUH Table -->
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm align-middle text-center" id="VEHICLE_table">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>SNo.</th>
+                                <th>VEHICLE NUMBER</th>
+                                <th>VENDOR NAME</th>
+                                <th>VENDOR CODE</th>
+                                <th>BUCKET NUMBER</th>
+                            </tr>
+                        </thead>
+                        <tbody id="Vehicle_body"></tbody>
+                    </table>
+                </div>
+                <div id="pagination-vehicle" class="d-flex justify-content-between mt-3 py-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Vehicle Tab -->
     <div class="tab-pane fade show" id="HISTORY">
         <div class="card shadow-sm">
             <div class="card-body">
@@ -99,7 +161,7 @@
                     </div>
 
                     <!-- Search Vehicle Number -->
-                    <div class="col-md-2 d-flex align-items-start">
+                    <div class="col-md-3 d-flex align-items-start">
                         <div class="input-group">
                             <div class="input-group-prepend">
                                 <span class="input-group-text h-100"><i class="fas fa-search"></i></span>
@@ -110,7 +172,7 @@
                     </div>
 
                     <!-- Search Vendor Name -->
-                    <div class="col-md-2 d-flex align-items-start">
+                    <div class="col-md-3 d-flex align-items-start">
                         <div class="input-group">
                             <div class="input-group-prepend">
                                 <span class="input-group-text h-100"><i class="fas fa-search"></i></span>
@@ -120,11 +182,11 @@
                         </div>
                     </div>
 
-                    <div class="col-md-6 d-flex align-items-start row">
-                        <div class="col-md-2 d-flex align-items-center">
-                            <button class="btn btn-success mx-2 w-30" onclick="fetchHISTORYData()">Fetch Data</button>
+                    <div class="col-md-4 d-flex align-items-start row">
+                        <div class="col-md-6 d-flex align-items-center">
+                            <button class="btn btn-success mx-2 w-30" onclick="fetchHistoryData()">Fetch Data</button>
                         </div>
-                        <div class="col-md-2 d-flex align-items-center">
+                        <div class="col-md-6 d-flex align-items-center">
                             <button class="btn btn-success mx-2 w-30" >Download Data</button> <!-- onclick="fetchHISTORYData()" -->
                         </div>
                     </div>
@@ -253,8 +315,18 @@
                         <input type="text" class="form-control form-control-lg" id="vendorNameInput"
                             placeholder="Enter vendor name">
                     </div>
-                    <!-- Vendor Code hidden -->
-                    <input type="hidden" id="vendorCode_hidden">
+                    <!-- Vendor Code -->
+                    <div class="mb-3">
+                        <label class="form-label fw-bold fs-3 mx-3">Vendor Code</label>
+                        <input type="text" class="form-control form-control-lg" id="vendorCodeInput"
+                            placeholder="Enter Vendor Code">
+                    </div>
+                    <!-- Becket Number -->
+                    <div class="mb-3">
+                        <label class="form-label fw-bold fs-3 mx-3">Bucket Number</label>
+                        <input type="text" class="form-control form-control-lg" id="bucketNumberInput"
+                            placeholder="Enter Bucket Number">
+                    </div>
 
                 </form>
             </div>

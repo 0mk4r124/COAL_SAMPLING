@@ -133,6 +133,7 @@ body {
 }
 
 .diagram-img {
+    max-height: 60vh;
     width: 100%;
     height: auto;
     display: block;

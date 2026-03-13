@@ -5,9 +5,12 @@ let startX, startY, imgX = 0, imgY = 0;
 let currentOpenedAnodeId = null;
 let currentOpenedBunch = null;
 let isImageLoading = false;
+let modalOpen = false;
 
 const img = document.getElementById("modalImage");
 const wrapper = document.getElementById("zoomWrapper");
+const modalElement = document.getElementById('vehicleDetailsModal');
+const vehicleModal = new bootstrap.Modal(modalElement);
 
 function getCookie(name) {
     let cookieValue = null;
@@ -110,13 +113,13 @@ function fetchHistoryData(page=1) {
     }
     
     const vehicleNumber = document.getElementById('vehicle_number_search').value.trim();
-    const vendorNumber = document.getElementById('vendor_number_search').value.trim();
-    let url = `/api/fetch_abf_data/?start_date=${startDate}&end_date=${endDate}&page=${page}`;
+    const vendorNumber = document.getElementById('vendor_name_search').value.trim();
+    let url = `/api/fetch_history_data/?start_date=${startDate}&end_date=${endDate}&page=${page}`;
     if (vehicleNumber) {
         url += `&vehicle_number=${encodeURIComponent(vehicleNumber)}`;
     }
     if (vendorNumber) {
-        url += `&vendor_number=${encodeURIComponent(vendorNumber)}`;
+        url += `&vendor_name=${encodeURIComponent(vendorNumber)}`;
     }
     
     fetch(url)
@@ -322,12 +325,25 @@ document.getElementById("imageModal")
         });
 });
 
-document.addEventListener('click', function (e) {
-    const btn = e.target.closest('.view-vehicle-btn');
-    if (!btn) return;
-    const modal = new bootstrap.Modal(document.getElementById('vehicleDetailsModal'));
-    modal.show();
-});
+function checkVehicle() {
+    fetch('/api/check_for_vehicle/')
+        .then(response => response.json())
+        .then(data => {
+
+            if (data.status === 'new' && !modalOpen) {
+                document.getElementById('rfidInput').value = data.rfid || "";
+                vehicleModal.show();
+                modalOpen = true;
+            }
+
+            if (data.status === 'present') {
+                document.getElementById('vendorName').textContent = data.vendor_name;
+                document.getElementById('vehicleNumber').textContent = data.vehicle_number;
+            }
+
+        })
+        .catch(err => console.error("Vehicle check failed:", err));
+}
 
 function updateSystemStatus() {
     const cameraContainer = document.getElementById('camera-indicators');
@@ -384,6 +400,8 @@ async function fetchSystemStatus() {
         console.error('Error fetching system status:', error);
     }
 }
+
+setInterval(checkVehicle, 5000);
 
 // Initialize
 // document.addEventListener('DOMContentLoaded', function() {
