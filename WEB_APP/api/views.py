@@ -79,6 +79,63 @@ def serve_file(request):
         return HttpResponse(f"Image file not found on this server: {os.path.basename(file_path)}", 
                         status=404, content_type='text/plain')
 
+def add_vehicle(request):
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+
+        rfid = data.get("rfid")
+        vehicle_number = data.get("vehicleNumber")
+        vendor_name = data.get("vendorName")
+        vendor_code = data.get("vendorCode")
+        bucketNo = data.get("bucketNo")
+
+        if not rfid or not vehicle_number or not vendor_code:
+            return JsonResponse({
+                "success": False,
+                "error": "Missing required fields"
+            }, status=400)
+
+        # Create or update vendor
+        vendor_obj, created = VENDOR_MASTER.objects.get_or_create(
+            vendor_code=vendor_code,
+            defaults={
+                "vendor_name": vendor_name,
+                "bucket_no": bucketNo,
+                "create_time": timezone.now()
+            }
+        )
+
+        # If vendor exists but name changed
+        if not created and vendor_name and vendor_obj.vendor_name != vendor_name:
+            vendor_obj.vendor_name = vendor_name
+            vendor_obj.save()
+
+        # Create or update vehicle
+        vehicle_obj, created = VEHICLE_MASTER.objects.update_or_create(
+            rfid=rfid,
+            defaults={
+                "vehicle_number": vehicle_number,
+                "vendor_code": vendor_code,
+                "create_time": timezone.now()
+            }
+        )
+
+        return JsonResponse({
+            "success": True,
+            "message": "Vehicle added/updated successfully",
+            "vehicle_id": vehicle_obj.id
+        })
+
+    except Exception as e:
+        print(e)
+        return JsonResponse({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
 @csrf_exempt
 def fetch_history_data(request):
     start_date = request.GET.get('start_date')
@@ -129,9 +186,6 @@ def fetch_history_data(request):
         "vendor_name": vendor_name,
     })
 
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-
 @csrf_exempt
 def check_for_vehicle(request):
     status = "new"
@@ -145,6 +199,7 @@ def check_for_vehicle(request):
         rfids = (current_vehicle.rfids or "").split("|")
 
         for rfid in rfids:
+            rfid_value = rfid
             vehicle = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
 
             if vehicle:
@@ -155,7 +210,6 @@ def check_for_vehicle(request):
                 status = "present"
                 vehicle_number = vehicle.vehicle_number
                 vendor_name = vendor.vendor_name if vendor else ""
-                rfid_value = rfid
                 break
 
     else:

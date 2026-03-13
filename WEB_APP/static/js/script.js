@@ -254,14 +254,16 @@ function renderPagination(pagination, tab) {
 document.getElementById('submitVehicleDetailsBtn').addEventListener("click", function () {
     const rfid = document.getElementById("rfidInput").value;
     const vehicleNumber = document.getElementById("vehicleNumberInput").value;
-    const vendorName = document.getElementById("vendorName").value;
-    const vendorCode = document.getElementById("vendorCode_hidden").value;
+    const vendorName = document.getElementById("vendorNameInput").value;
+    const vendorCode = document.getElementById("vendorCodeInput").value;
+    const bucketNo = document.getElementById("bucketNoInput").value;
 
     const payload = {
         rfid: rfid,
         vehicleNumber: vehicleNumber,
         vendorName: vendorName,
         vendorCode: vendorCode,
+        bucketNo: bucketNo,
     };
 
     fetch(`/api/add_vehicle/`, {
@@ -275,8 +277,24 @@ document.getElementById('submitVehicleDetailsBtn').addEventListener("click", fun
     .then(res => {
         if (res.success) {
             alert("Vehicle updated successfully");
+
+            // Reset form fields
+            document.getElementById("vehicleDetailsForm").reset();
+
+            // Close modal
+            const modalEl = document.getElementById("vehicleDetailsModal");
+            const modalInstance = bootstrap.Modal.getInstance(modalEl);
+            modalInstance.hide();
+
+            // Reset modal flag so it can open again for next vehicle
+            modalOpen = false;
+
+            // Clear RFID field as well
+            document.getElementById("rfidInput").value = "";
+        } 
+        else {
+            alert(res.error || "Failed to update");
         }
-        else alert("Failed to update")
     })
     .catch(err => console.error(err));
 });
