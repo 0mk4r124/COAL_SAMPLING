@@ -112,8 +112,8 @@ class PLCCOMMINCATION:
             for _ in range(MAX_RETRY_ATTEMPTS):
                 if self.isPLCConnected(clientConn) is True:
                     data = bytearray(1)
-                    util.set_int(data,db_col_start_buffer_pos,0,bool_value)
-                    clientConn.db_write(self.DB_WRITE_NUMBER,db_col_start_buffer_pos,data)
+                    util.set_bool(data, 0, 0, bool_value)
+                    clientConn.db_write(self.DB_WRITE_NUMBER, db_col_start_buffer_pos, data)
                 else:
                     print("PLC not connected")
         except Exception as e:
@@ -124,8 +124,8 @@ class PLCCOMMINCATION:
         try:
             if self.isPLCConnected(clientConn) is True:
                 data = bytearray(2)
-                util.set_int(data,db_col_start_buffer_pos,int_value)
-                clientConn.db_write(self.DB_WRITE_NUMBER,db_col_start_buffer_pos,data)
+                util.set_int(data, 0, int_value)   # FIX
+                clientConn.db_write(self.DB_WRITE_NUMBER, db_col_start_buffer_pos, data)
             else:
                 print("PLC not connected")
         except Exception as e:
