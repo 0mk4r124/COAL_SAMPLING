@@ -261,7 +261,8 @@ class Manager:
             return
         status = msg.get("status", "")
         if status == "barrier_opened":
-            self._goto(State.SET_BUCKET)
+            # self._goto(State.SET_BUCKET)
+            self._goto(State.VEHICLE_PLACEMENT)
         elif status == "barrier_error":
             print(f"[MANAGER] Barrier error: {msg.get('msg')}")
             self._goto(State.ERROR)
@@ -282,10 +283,24 @@ class Manager:
         self._goto(State.VEHICLE_PLACEMENT)
 
     def _handle_vehicle_placement(self):
-        self.positions = get_sample_positions()
-        self.cycle = 0
-        print(f"[MANAGER] Sampling positions: {self.positions}")
-        self._goto(State.CYCLE_POSITION)
+        msg = self._pop("plc_barrier/status")
+
+        status = msg.get("status", "")
+        if status == "truck":
+            present = msg.get("present", False)
+            if present:
+                print("[MANAGER] Truck placement confirmed.")
+                time.sleep(60)  # brief pause to ensure stable placement
+                self._barrier(action="close_barrier")
+                self._goto(State.COMPLETE)
+            else:
+                print("[MANAGER] Truck removed — resetting.")
+                self._reset()
+
+        # self.positions = get_sample_positions()
+        # self.cycle = 0
+        # print(f"[MANAGER] Sampling positions: {self.positions}")
+        # self._goto(State.CYCLE_POSITION)
 
     def _handle_cycle_position(self):
         self.cycle += 1
@@ -375,12 +390,12 @@ class Manager:
         State.WAITING_FOR_DB : "_handle_waiting_for_db",
         State.OPEN_BARRIER : "_handle_open_barrier",
         State.BARRIER_OPENING : "_handle_barrier_opening",
-        State.SET_BUCKET : "_handle_set_bucket",
+        # State.SET_BUCKET : "_handle_set_bucket",
         State.VEHICLE_PLACEMENT : "_handle_vehicle_placement",
-        State.CYCLE_POSITION : "_handle_cycle_position",
-        State.CYCLE_CAPTURE : "_handle_cycle_capture",
-        State.CYCLE_DONE : "_handle_cycle_done",
-        State.GREEN_SIGNAL : "_handle_green_signal",
+        # State.CYCLE_POSITION : "_handle_cycle_position",
+        # State.CYCLE_CAPTURE : "_handle_cycle_capture",
+        # State.CYCLE_DONE : "_handle_cycle_done",
+        # State.GREEN_SIGNAL : "_handle_green_signal",
         State.COMPLETE : "_handle_complete",
         State.ERROR : "_handle_error",
     }

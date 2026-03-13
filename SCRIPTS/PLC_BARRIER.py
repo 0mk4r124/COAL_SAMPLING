@@ -43,15 +43,15 @@ class BarrierController:
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_CLOSE, 0)
 
             # Poll status bit until confirmed or timeout
-            # deadline = time.time() + BARRIER_OPEN_TIMEOUT
-            # while time.time() < deadline:
-            #     open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
-            #     close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
-            #     if (open_bit == 1) and (close_bit == 0):
-            #         print("[PLC_BARRIER] Barrier OPEN confirmed.")
-            #         self.mqtt.publish(TOPIC_OUT, {"status": "barrier_opened"})
-            #         return
-            #     time.sleep(0.5)
+            deadline = time.time() + BARRIER_OPEN_TIMEOUT
+            while time.time() < deadline:
+                open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
+                close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
+                if (open_bit == 1) and (close_bit == 0):
+                    print("[PLC_BARRIER] Barrier OPEN confirmed.")
+                    self.mqtt.publish(TOPIC_OUT, {"status": "barrier_opened"})
+                    return
+                time.sleep(0.5)
 
             raise TimeoutError("Barrier did not open within timeout.")
 
@@ -68,15 +68,15 @@ class BarrierController:
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_CLOSE, 1)
             print("[PLC_BARRIER] Barrier CLOSE command sent.")
 
-            # deadline = time.time() + BARRIER_OPEN_TIMEOUT
-            # while time.time() < deadline:
-            #     open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
-            #     close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
-            #     if (open_bit == 0) and (close_bit == 1):
-            #         print("[PLC_BARRIER] Barrier OPEN confirmed.")
-            #         self.mqtt.publish(TOPIC_OUT, {"status": "barrier_opened"})
-            #         return
-            #     time.sleep(0.5)
+            deadline = time.time() + BARRIER_OPEN_TIMEOUT
+            while time.time() < deadline:
+                open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
+                close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
+                if (open_bit == 0) and (close_bit == 1):
+                    print("[PLC_BARRIER] Barrier OPEN confirmed.")
+                    self.mqtt.publish(TOPIC_OUT, {"status": "barrier_closed"})
+                    return
+                time.sleep(0.5)
 
             self.mqtt.publish(TOPIC_OUT, {"status": "barrier_closed"})
         except Exception as e:
@@ -158,24 +158,22 @@ class BarrierController:
         while True:
             try:
                 data = self.mqtt.data
-                print(f"[PLC_BARRIER] Truck Present -- {self.truck_present()}")
+                if self.truck_present():
+                    print("[PLC_BARRIER] Truck detected.")
+                    self.mqtt.publish(TOPIC_OUT, {"status": "truck", "present": True})
+
                 if data and data.get("_consumed") is not True:
                     action    = data.get("action", "")
                     bucket_no = data.get("bucket_no", 0)
                     self.mqtt.data = {**data, "_consumed": True}
-                    # self.red_signal()
-                    # time.sleep(15)
-                    # self.green_signal()
 
                     if action == "open_barrier":
                         self.open_barrier()
-                        self.red_signal()
                     elif action == "close_barrier":
-                        # if self.truck_present():
-                        self.close_barrier()
-                        self.green_signal()
-                        # else:
-                        #     print(f"[PLC_BARRIER] Couldn't close truck present !")
+                        if self.truck_present():
+                            self.close_barrier()
+                        else:
+                            print(f"[PLC_BARRIER] Couldn't close truck present !")
                     elif action == "set_bucket":
                         self.set_bucket(bucket_no)
                     else:
