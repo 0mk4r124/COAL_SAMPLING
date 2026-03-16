@@ -43,7 +43,7 @@ class CamController:
     def initialize(self):
         for name, cam in self.cams.items():
             ok = cam.initialize()
-            print(f"[CAM_CAPTURE] {name} init → {'OK' if ok else 'FAILED'}")
+            print(f"[CAM_CAPTURE] {name} init  {'OK' if ok else 'FAILED'}")
 
     def _on_command(self, action: str, uid: str, cycle: int):
 
@@ -64,7 +64,7 @@ class CamController:
             if img is None:
                 raise RuntimeError("CAM2 returned None")
             path = save_frame(img, uid, "CAM2", cycle=0)
-            print(f"[CAM_CAPTURE] CAM2 saved → {path}")
+            print(f"[CAM_CAPTURE] CAM2 saved  {path}")
             self.mqtt.publish(TOPIC_OUT, {
                 "action": "cam2_done", "uid": uid, "cycle": 0, "path": path
             })
