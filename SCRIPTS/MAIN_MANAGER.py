@@ -133,6 +133,27 @@ def db_create_log(uid: str, rfids: list) -> bool:
     finally:
         if db: db.close()
 
+def db_error_log(uid: str) -> bool:
+    db = None
+    try:
+        db  = _db_connect()
+        cur = db.cursor()
+        cur.execute(
+            """
+            UPDATE VEHICLE_LOGS
+               SET STATUS = 'ERROR', UPDATE_TIME = %s
+             WHERE UID = %s
+            """,
+            (datetime.now(), uid)
+        )
+        db.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] db_complete_log error: {e}")
+        return False
+    finally:
+        if db: db.close()
+
 def db_complete_log(uid: str) -> bool:
     db = None
     try:
@@ -370,6 +391,7 @@ class Manager:
         self._cam(action="reset")
         self._barrier(action="close_barrier")
         self._sampler(action="reset")
+        db_error_log(self.uid)
         self._reset()
 
     def _reset(self):
