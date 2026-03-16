@@ -300,43 +300,41 @@ class Manager:
         status = msg.get("status", "")
         if status == "barrier_closed":
             time.sleep(30)
-            self._goto(State.GREEN_SIGNAL)
+            self._goto(State.CYCLE_CAPTURE)
         elif status == "barrier_error":
             print(f"[MANAGER] Barrier error: {msg.get('msg')}")
             self._goto(State.ERROR)
 
-    def _handle_cycle_position(self):
-        self.cycle += 1
-        if self.cycle > TOTAL_CYCLES:
-            self._goto(State.GREEN_SIGNAL)
-            return
-        pos = self.positions[self.cycle - 1]
-        print(f"[MANAGER] Cycle {self.cycle}/{TOTAL_CYCLES}  {pos}")
-        self._sampler(action="set_position",
-                      x=pos["x"], y=pos["y"], cycle=self.cycle)
-        self._goto(State.CYCLE_CAPTURE)
-
     def _handle_cycle_capture(self):
+
         msg = self._pop("plc_sampler/status")
         if not msg:
+            if self.cycle == 0:
+                print("[MANAGER] Starting sampling cycle 1")
+                self._sampler(action="sample_cycle_1")
+                self.cycle = -1   # prevent retrigger
             return
+
         status = msg.get("status", "")
-        if status == "position_set":
-            self._cam(action="cam13_start", uid=self.uid, cycle=self.cycle)
-            self._sampler(action="start_cycle", cycle=self.cycle)
-        elif status == "discharge_received":
-            print(f"[MANAGER] Discharge received for cycle {msg.get('cycle')}.")
-            self._cam(action="cam13_stop")
-            self._goto(State.CYCLE_DONE)
-        elif status == "error":
+        if status == "sampler_error":
             print(f"[MANAGER] Sampler error: {msg.get('msg')}")
             self._goto(State.ERROR)
+            return
 
-    def _handle_cycle_done(self):
-        if self.cycle < TOTAL_CYCLES:
-            time.sleep(1)
-            self._goto(State.CYCLE_POSITION)
-        else:
+        if status == "sample_cycle_1_comp":
+            print("[MANAGER] Sample cycle 1 completed")
+            self._sampler(action="sample_cycle_2")
+            print("[MANAGER] Starting sampling cycle 2")
+        elif status == "sample_cycle_2_comp":
+            print("[MANAGER] Sample cycle 2 completed")
+            self._sampler(action="sample_cycle_3")
+            print("[MANAGER] Starting sampling cycle 3")
+        elif status == "sample_cycle_3_comp":
+            print("[MANAGER] Sample cycle 3 completed")
+            self._sampler(action="sample_cycle_stop")
+            print("[MANAGER] Stopping sampler")
+        elif status == "sample_cycle_stop_comp":
+            print("[MANAGER] Sampler stopped")
             self._goto(State.GREEN_SIGNAL)
 
     def _handle_red_signal(self):
@@ -394,9 +392,7 @@ class Manager:
         State.CLOSE_BARRIER    : "_handle_close_barrier",
         State.BARRIER_CLOSING  : "_handle_barrier_closing",
         State.RED_SIGNAL       : "_handle_red_signal",
-        # State.CYCLE_POSITION : "_handle_cycle_position",
-        # State.CYCLE_CAPTURE  : "_handle_cycle_capture",
-        # State.CYCLE_DONE     : "_handle_cycle_done",
+        State.CYCLE_CAPTURE    : "_handle_cycle_capture",
         State.GREEN_SIGNAL     : "_handle_green_signal",
         State.COMPLETE         : "_handle_complete",
         State.ERROR            : "_handle_error",

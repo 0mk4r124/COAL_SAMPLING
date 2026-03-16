@@ -1,179 +1,197 @@
 import time
-import threading
 
 from DEPENDANT.SNAP7 import PLCCOMMINCATION
-from DEPENDANT.MQTT  import MQTT
+from DEPENDANT.MQTT import MQTT
 
-# ── PLC connection ────────────────────────────────────────────────────────────
-PLC_IP   = "192.168.1.11"    # ← update
-PLC_RACK = 0                 # ← update
-PLC_SLOT = 1                 # ← update
 
-# ── Data Block numbers ────────────────────────────────────────────────────────
-DB_READ  = 2                 # ← update
-DB_WRITE = 2                 # ← update
+PLC_IP = "192.168.1.2"
 
-# ── Byte offsets inside the Data Block ───────────────────────────────────────
-OFFSET_X            = 0     # ← update: INT (2 bytes)
-OFFSET_Y            = 2     # ← update: INT (2 bytes)
-OFFSET_CYCLE_START  = 4     # ← update: INT (2 bytes)
-OFFSET_DISCHARGE    = 6     # ← update: BYTE (1 byte), bit 0 = done
-OFFSET_GREEN_SIGNAL = 8     # ← update: INT (2 bytes)
+DB_READ = 24
+DB_WRITE = 23
 
-# ── Tuning ────────────────────────────────────────────────────────────────────
-DISCHARGE_BIT     = 0       # bit index in OFFSET_DISCHARGE byte
-DISCHARGE_TIMEOUT = 120     # seconds before giving up on a cycle
-DISCHARGE_POLL_S  = 0.2     # poll interval
+# INPUT OFFSETS
+X_FORWORD_SENSOR_FB = 0
+X_REVERSE_SENSOR_FB = 2
+Y_LEFT_SENSOR_FB = 4
+Y_RIGHT_SENSOR_FB = 6
+Z_UP_SENSOR_FB = 8
+Z_DOWN_SENSOR_FB = 10
 
-# ── MQTT topics ───────────────────────────────────────────────────────────────
-TOPIC_IN  = "manager/plc_sampler"
+# OUTPUT OFFSETS
+CYCLE_START = 0
+CYCLE_STOP = 2
+X_AXIS_FORWORD = 4
+X_AXIS_REVERSE = 6
+Y_AXIS_LEFT = 8
+Y_AXIS_RIGHT = 10
+
+TOPIC_IN = "manager/plc_sampler"
 TOPIC_OUT = "plc_sampler/status"
-
 
 class SamplerController:
 
-    def __init__(self):
-        self.plc  = PLCCOMMINCATION(
-            ip_address=PLC_IP,
-            db_read=DB_READ,
-            db_write=DB_WRITE,
-            rack=PLC_RACK,
-            slot=PLC_SLOT,
-        )
+    def __init__(self, total_x, total_y):
+
+        self.total_x = total_x
+        self.total_y = total_y
+        self.plc = PLCCOMMINCATION(PLC_IP, DB_READ, DB_WRITE, "REED")
         self.mqtt = MQTT("PLC_SAMPLER")
-        self._monitor_thread: threading.Thread | None = None
-        self._monitoring = False
+        self.client = self.plc.createConnection()
 
-    # ── Set X / Y position ────────────────────────────────────────────────────
-    def set_position(self, x, y, cycle: int):
+
+    def sensors_ready(self):
+
         try:
-            print(f"[PLC_SAMPLER] Position  X={x}  Y={y}  cycle={cycle}")
-            self.plc.write(OFFSET_X, int(x))
-            self.plc.write(OFFSET_Y, int(y))
-            print("[PLC_SAMPLER] Position written.")
-            self.mqtt.publish(TOPIC_OUT, {
-                "status": "position_set", "cycle": cycle
-            })
-        except Exception as e:
-            msg = f"set_position error: {e}"
-            print(f"[PLC_SAMPLER] {msg}")
-            self.mqtt.publish(TOPIC_OUT, {"status": "error", "msg": msg})
-
-    # ── Start a sampling cycle ────────────────────────────────────────────────
-    def start_cycle(self, cycle: int):
-        try:
-            print(f"[PLC_SAMPLER] Starting cycle {cycle} …")
-            self.plc.write(OFFSET_CYCLE_START, 0)   # ensure reset first
-            time.sleep(0.2)
-            self.plc.write(OFFSET_CYCLE_START, 1)   # rising edge = start
-            print(f"[PLC_SAMPLER] Cycle {cycle} start pulse sent.")
-            self.mqtt.publish(TOPIC_OUT, {
-                "status": "cycle_started", "cycle": cycle
-            })
-
-            # Monitor discharge in a background thread
-            self._stop_monitor()
-            self._monitor_thread = threading.Thread(
-                target=self._wait_for_discharge,
-                args=(cycle,),
-                daemon=True
-            )
-            self._monitoring = True
-            self._monitor_thread.start()
+            x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
+            x_reverse = self.plc.readIntFromPLC(self.client, X_REVERSE_SENSOR_FB)
+            z_up = self.plc.readIntFromPLC(self.client, Z_UP_SENSOR_FB)
+            if x_forward == 1 and x_reverse == 1 and z_up == 1:
+                return True
 
         except Exception as e:
-            msg = f"start_cycle error: {e}"
-            print(f"[PLC_SAMPLER] {msg}")
-            self.mqtt.publish(TOPIC_OUT, {"status": "error", "msg": msg})
+            print(f"[PLC_SAMPLER] Sensor read error: {e}")
+        return False
 
-    # ── Background: wait for discharge signal ─────────────────────────────────
-    def _wait_for_discharge(self, cycle: int):
-        deadline = time.time() + DISCHARGE_TIMEOUT
-        print(f"[PLC_SAMPLER] Monitoring discharge for cycle {cycle} …")
 
-        while time.time() < deadline and self._monitoring:
-            try:
-                bit = self.plc.read_bit(DISCHARGE_BIT, OFFSET_DISCHARGE)
-                if bit == 1:
-                    self.plc.write(OFFSET_CYCLE_START, 0)   # reset start bit
-                    print(f"[PLC_SAMPLER] Discharge received for cycle {cycle}.")
-                    self._monitoring = False
-                    self.mqtt.publish(TOPIC_OUT, {
-                        "status": "discharge_received", "cycle": cycle
-                    })
-                    return
-            except Exception as e:
-                print(f"[PLC_SAMPLER] Discharge monitor error: {e}")
+    def move_x_reverse(self, duration):
 
-            time.sleep(DISCHARGE_POLL_S)
-
-        if self._monitoring:
-            msg = f"Discharge timeout for cycle {cycle}"
-            print(f"[PLC_SAMPLER] {msg}")
-            self._monitoring = False
-            self.mqtt.publish(TOPIC_OUT, {"status": "error", "msg": msg})
-
-    def _stop_monitor(self):
-        self._monitoring = False
-        if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=2)
-
-    # ── Send green (all sampling done) signal ─────────────────────────────────
-    def send_green(self):
         try:
-            print("[PLC_SAMPLER] Sending GREEN signal …")
-            self.plc.write(OFFSET_GREEN_SIGNAL, 1)
-            print("[PLC_SAMPLER] GREEN signal written.")
-            self.mqtt.publish(TOPIC_OUT, {"status": "green_sent"})
+            print("[PLC_SAMPLER] Moving X Axis Reverse")
+            start_time = time.time()
+            while (time.time() - start_time) < duration:
+                self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 1)
+                time.sleep(0.05)
+            self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 0)
+
         except Exception as e:
-            msg = f"send_green error: {e}"
+
+            msg = f"X reverse movement error: {e}"
             print(f"[PLC_SAMPLER] {msg}")
-            self.mqtt.publish(TOPIC_OUT, {"status": "error", "msg": msg})
+            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+            raise
 
-    # ── Reset all PLC outputs ─────────────────────────────────────────────────
-    def reset_plc(self):
+
+    def move_y_left(self, duration):
+
         try:
-            self._stop_monitor()
-            self.plc.write(OFFSET_CYCLE_START,  0)
-            self.plc.write(OFFSET_GREEN_SIGNAL, 0)
-            print("[PLC_SAMPLER] PLC outputs reset.")
-        except Exception as e:
-            print(f"[PLC_SAMPLER] reset_plc error: {e}")
+            print("[PLC_SAMPLER] Moving Y Axis Left")
+            start_time = time.time()
+            while (time.time() - start_time) < duration:
+                self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 1)
+                time.sleep(0.05)
+            self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 0)
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
+        except Exception as e:
+
+            msg = f"Y left movement error: {e}"
+            print(f"[PLC_SAMPLER] {msg}")
+            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+            raise
+
+
+    def start_cycle(self):
+
+        try:
+            print("[PLC_SAMPLER] Starting sampler cycle")
+
+            self.plc.writeIntToPLC(self.client, CYCLE_START, 1)
+            time.sleep(1)
+            self.plc.writeIntToPLC(self.client, CYCLE_START, 0)
+            self.mqtt.publish(TOPIC_OUT, {"status": "cycle_started"})
+
+        except Exception as e:
+
+            msg = f"Cycle start error: {e}"
+            print(f"[PLC_SAMPLER] {msg}")
+            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+            raise
+
+
+    def stop_cycle(self):
+
+        try:
+
+            print("[PLC_SAMPLER] Stop cycle requested")
+
+            time.sleep(120)
+            self.plc.writeIntToPLC(self.client, CYCLE_STOP, 1)
+            time.sleep(1)
+            self.plc.writeIntToPLC(self.client, CYCLE_STOP, 0)
+            self.mqtt.publish(TOPIC_OUT, {"status": "cycle_stopped"})
+
+        except Exception as e:
+
+            msg = f"Cycle stop error: {e}"
+            print(f"[PLC_SAMPLER] {msg}")
+            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+
+
+    def run_cycle(self, x_duration):
+
+        try:
+            print("[PLC_SAMPLER] Waiting for sensors")
+            while True:
+
+                if self.sensors_ready():
+                    print("[PLC_SAMPLER] Sensors ready")
+                    break
+                time.sleep(0.2)
+
+            self.move_x_reverse(x_duration)
+            self.move_y_left(self.total_y / 2)
+            self.start_cycle()
+
+        except Exception as e:
+
+            msg = f"Cycle execution error: {e}"
+            print(f"[PLC_SAMPLER] {msg}")
+            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+
+
     def run(self):
+
         self.mqtt.subscribe(TOPIC_IN)
         print("[PLC_SAMPLER] Ready, waiting for commands …")
 
         while True:
             try:
+
                 data = self.mqtt.data
                 if data and data.get("_consumed") is not True:
+
                     action = data.get("action", "")
-                    x      = data.get("x",     0)
-                    y      = data.get("y",     0)
-                    cycle  = data.get("cycle", 0)
                     self.mqtt.data = {**data, "_consumed": True}
 
-                    if action == "set_position":
-                        self.set_position(x, y, cycle)
-                    elif action == "start_cycle":
-                        self.start_cycle(cycle)
-                    elif action == "send_green":
-                        self.send_green()
-                    elif action == "reset":
-                        self.reset_plc()
+                    if action == "sample_cycle_1":
+                        x_time = (4 * self.total_x) / 5
+                        self.run_cycle(x_time)
+                        self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_1_comp"})
+                    elif action == "sample_cycle_2":
+                        x_time = (3 * self.total_x) / 5
+                        self.run_cycle(x_time)
+                        self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_2_comp"})
+                    elif action == "sample_cycle_3":
+                        x_time = (2 * self.total_x) / 5
+                        self.run_cycle(x_time)
+                        self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
+                    elif action == "sample_cycle_stop":
+                        self.stop_cycle()
+                        self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_stop_comp"})
                     else:
                         print(f"[PLC_SAMPLER] Unknown action: {action}")
 
             except Exception as e:
-                print(f"[PLC_SAMPLER] Loop error: {e}")
+                msg = f"Loop error: {e}"
+                print(f"[PLC_SAMPLER] {msg}")
+                self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
 
             time.sleep(0.05)
 
-
 def main():
-    controller = SamplerController()
+    total_x = 10
+    total_y = 8
+
+    controller = SamplerController(total_x, total_y)
     controller.run()
 
 
