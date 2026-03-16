@@ -89,7 +89,7 @@ class BarrierController:
             print("[PLC_BARRIER] Green Signal …")
             self.plc.writeIntToPLC(self.client, GREEN_SIGNAL, 1)
             self.plc.writeIntToPLC(self.client, RED_SIGNAL, 0)
-
+            self.mqtt.publish(TOPIC_OUT, {"status": "green_sent"})
         except Exception as e:
             msg = f"Green Signal error: {e}"
             print(f"[PLC_BARRIER] {msg}")
@@ -100,7 +100,7 @@ class BarrierController:
             print("[PLC_BARRIER] Red Signal …")
             self.plc.writeIntToPLC(self.client, GREEN_SIGNAL, 0)
             self.plc.writeIntToPLC(self.client, RED_SIGNAL, 1)
-
+            self.mqtt.publish(TOPIC_OUT, {"status": "red_sent"})
         except Exception as e:
             msg = f"Green Signal error: {e}"
             print(f"[PLC_BARRIER] {msg}")
@@ -116,7 +116,7 @@ class BarrierController:
                 home_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_HOME_P)
                 if home_bit == 1:
                     self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 0)
-                    time.sleep(1)
+                    time.sleep(5)
                     break
                 else: self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 1)
 
@@ -129,6 +129,7 @@ class BarrierController:
                 bucket_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_COUNT_READ)
                 if bucket_bit == bucket_number: 
                     self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 0)
+                    self.mqtt.publish(TOPIC_OUT, {"status": "bucket_set"})
                     break
 
         except Exception as e:
@@ -139,7 +140,6 @@ class BarrierController:
     def truck_present(self):
         present = False
         try:
-            print("[PLC_BARRIER] Checking Truck …")
 
             first_bit = self.plc.readIntFromPLC(self.client, TRUCK_PRESENT1)
             second_bit = self.plc.readIntFromPLC(self.client, TRUCK_PRESENT2)
@@ -158,9 +158,6 @@ class BarrierController:
         while True:
             try:
                 data = self.mqtt.data
-                if self.truck_present():
-                    print("[PLC_BARRIER] Truck detected.")
-                    self.mqtt.publish(TOPIC_OUT, {"status": "truck", "present": True})
 
                 if data and data.get("_consumed") is not True:
                     action    = data.get("action", "")
@@ -170,12 +167,18 @@ class BarrierController:
                     if action == "open_barrier":
                         self.open_barrier()
                     elif action == "close_barrier":
+                        self.close_barrier()
+                    elif action == "check_truck":
                         if self.truck_present():
-                            self.close_barrier()
-                        else:
-                            print(f"[PLC_BARRIER] Couldn't close truck present !")
+                            self.mqtt.publish(TOPIC_OUT, {"status": "truck", "present": True})
+                            time.sleep(5)
                     elif action == "set_bucket":
+                        print(f"[PLC_BARRIER] Setting Bucket")
                         self.set_bucket(bucket_no)
+                    elif action == "green_signal":
+                        self.green_signal()
+                    elif action == "red_signal":
+                        self.red_signal()
                     else:
                         print(f"[PLC_BARRIER] Unknown action: {action}")
 

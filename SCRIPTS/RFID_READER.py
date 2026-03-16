@@ -17,7 +17,7 @@ def main():
     session_active = False
     session_uid = None
     session_start = None
-    last_seen = None
+    last_seen = time.time()
     rfids = set()
 
     print(f"[RFID_READER] Connecting to RFID reader at {TCP_IP}:{TCP_PORT}")
@@ -34,18 +34,20 @@ def main():
                 if data:
                     raw  = data.hex().upper()
                     rfid = data.decode(errors="ignore").strip()
+                    rfid = str(rfid)[1:]
 
                     print(f"[RFID_READER] Tag raw={raw}  decoded={rfid!r}")
 
                     if not session_active:
                         session_uid   = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
-                        session_start = time.time()
+                        last_seen = time.time()
                         session_active = True
                         rfids = set()
                         print(f"[RFID_READER] Session started: {session_uid}")
 
-                    rfids.add(rfid)
-                    last_seen = time.time()
+                    if rfid not in rfids:
+                        last_seen = time.time() 
+                        rfids.add(rfid)
 
             except socket.timeout: pass
             except Exception as e:
@@ -68,6 +70,7 @@ def main():
                     session_uid = None
                     last_seen = None
                     rfids = set()
+                    time.sleep(500)
 
 
 if __name__ == "__main__":

@@ -422,9 +422,9 @@ async function fetchSystemStatus() {
 setInterval(checkVehicle, 5000);
 
 // Initialize
-// document.addEventListener('DOMContentLoaded', function() {
-//     fetchSystemStatus();
+document.addEventListener('DOMContentLoaded', function() {
+    fetchSystemStatus();
     
-//     // Update every 10 seconds
-//     setInterval(fetchSystemStatus, 10000);
-// });
+    // Update every 10 seconds
+    setInterval(fetchSystemStatus, 10000);
+});

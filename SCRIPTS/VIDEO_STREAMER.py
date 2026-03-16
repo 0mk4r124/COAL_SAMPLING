@@ -35,6 +35,7 @@ def generate(cap, rtsp_url, num):
             frame = nocam
 
         frame = cv2.resize(frame, (960, 540))
+        # resized = cv2.resize(frame, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
         ret, buffer = cv2.imencode(".jpg", frame)
         frame_bytes = buffer.tobytes()
 

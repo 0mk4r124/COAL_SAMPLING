@@ -193,7 +193,7 @@ def check_for_vehicle(request):
     vendor_name = ""
     rfid_value = ""
 
-    current_vehicle = VEHICLE_LOGS.objects.filter(status="INPROGRESS").first()
+    current_vehicle = VEHICLE_LOGS.objects.filter(status="IN_PROGRESS").first()
 
     if current_vehicle:
         rfids = (current_vehicle.rfids or "").split("|")

@@ -4,7 +4,7 @@ from django.db import models
 class VEHICLE_LOGS(models.Model):
     id = models.AutoField(db_column='ID', primary_key=True)
     uid = models.CharField(db_column='UID', max_length=50, blank=True, null=True)
-    rfids = models.CharField(db_column='RFIDS', max_length=100, blank=True, null=True)
+    rfids = models.CharField(db_column='RFIDS', max_length=500, blank=True, null=True)
     img_1_path = models.CharField(db_column='IMG_1_PATH', max_length=500, blank=True, null=True)
     img_2_path = models.CharField(db_column='IMG_2_PATH', max_length=500, blank=True, null=True)
     img_3_path = models.CharField(db_column='IMG_3_PATH', max_length=500, blank=True, null=True)
