@@ -61,7 +61,7 @@ def main():
                         "timestamp" : datetime.now().isoformat(),
                     }
                     mq.publish(TOPIC_OUT, payload)
-                    print(f"[RFID_READER] Published → {TOPIC_OUT}: {payload}")
+                    print(f"[RFID_READER] Published {TOPIC_OUT}: {payload}")
 
                     # reset
                     session_active = False

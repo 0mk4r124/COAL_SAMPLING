@@ -175,10 +175,7 @@ class Manager:
         self._state_entered_at: float = 0.0
         self._db_last_polled  : float = 0.0
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
     def _pop(self, topic: str) -> dict | None:
-        """BUG 1 FIX: delegates to MQTT.pop() which uses a deque, not a dict
-        slot — every message is preserved in arrival order."""
         return self.mqtt.pop(topic)
 
     def _cam(self, **kw):     self.mqtt.publish("manager/camera",       kw)
@@ -202,6 +199,7 @@ class Manager:
 
     # ── State handlers ────────────────────────────────────────────────────────
     def _handle_idle(self):
+        print(self._inbox)
         msg = self._pop("manager/rfid")
         if not msg:
             return
@@ -221,7 +219,7 @@ class Manager:
                 print("[MANAGER] Vehicle already in front — aborting.")
                 self._reset()
                 return
-            db_create_log(self.uid, self.rfids, vehicle)
+            # db_create_log(self.uid, self.rfids)
             self._goto(State.OPEN_BARRIER)
         else:
             db_create_log(self.uid, self.rfids)
@@ -249,8 +247,11 @@ class Manager:
                 print("[MANAGER] Vehicle already in front — aborting.")
                 self._reset()
                 return
-            db_create_log(self.uid, self.rfids, vehicle)
+
+            # db_create_log(self.uid, self.rfids, vehicle)
             self._goto(State.OPEN_BARRIER)
+        else:
+            return
 
     def _handle_open_barrier(self):
         self._barrier(action="open_barrier")
@@ -258,8 +259,8 @@ class Manager:
 
     def _handle_barrier_opening(self):
         msg = self._pop("plc_barrier/status")
-        if not msg:
-            return
+        if not msg: return
+
         status = msg.get("status", "")
         if status == "barrier_opened":
             self._goto(State.VEHICLE_PLACEMENT)
