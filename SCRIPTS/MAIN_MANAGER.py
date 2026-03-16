@@ -48,14 +48,26 @@ def _db_connect():
         host=DB_HOST, user=DB_USER, passwd=DB_PASS, db=DB_NAME,
         autocommit=False
     )
-
+ 
 def db_find_vehicle(rfid: str) -> dict | None:
     db = None
     try:
         db  = _db_connect()
         cur = db.cursor(pymysql.cursors.DictCursor)
         cur.execute(
-            "SELECT * FROM VEHICLE_MASTER WHERE RFID = %s LIMIT 1", (rfid,)
+            """
+            SELECT
+                vm.RFID,
+                vm.VEHICLE_NUMBER,
+                vm.VENDOR_CODE,
+                vr.VENDER_NAME,
+                vr.BUCKET_NO
+            FROM VEHICLE_MASTER  vm
+            LEFT JOIN VENDOR_MASTER vr ON vr.VENDOR_CODE = vm.VENDOR_CODE
+            WHERE vm.RFID = %s
+            LIMIT 1
+            """,
+            (rfid,)
         )
         return cur.fetchone()
     except Exception as e:
@@ -63,17 +75,27 @@ def db_find_vehicle(rfid: str) -> dict | None:
         return None
     finally:
         if db: db.close()
-
-def db_vehicle_already_in_front(vehicle_no: str) -> bool:
+ 
+def db_vehicle_already_in_front(rfids_str: str) -> bool:
     db = None
     try:
         db  = _db_connect()
         cur = db.cursor()
-        cur.execute(
-            """SELECT COUNT(*) FROM VEHICLE_LOGS
-               WHERE VEHICLE_NO = %s AND STATUS = 'IN_PROGRESS'""",
-            (vehicle_no,)
+        # rfids_str is a '|'-separated list e.g. "AAA|BBB|CCC"
+        # Build one OR clause per RFID so we don't need a stored function.
+        rfid_list = [r.strip() for r in rfids_str.split("|") if r.strip()]
+        if not rfid_list:
+            return False
+ 
+        placeholders = " OR ".join(
+            ["FIND_IN_SET(%s, REPLACE(RFIDS, '|', ',')) > 0"] * len(rfid_list)
         )
+        query = f"""
+            SELECT COUNT(*) FROM VEHICLE_LOGS
+            WHERE STATUS = 'IN_PROGRESS'
+              AND ({placeholders})
+        """
+        cur.execute(query, rfid_list)
         row = cur.fetchone()
         return (row[0] > 0) if row else False
     except Exception as e:
@@ -81,41 +103,43 @@ def db_vehicle_already_in_front(vehicle_no: str) -> bool:
         return False
     finally:
         if db: db.close()
-
-def db_create_log(uid: str, rfids: list, vehicle: dict) -> bool:
+ 
+def db_create_log(uid: str, rfids: list) -> bool:
     db = None
     try:
         db  = _db_connect()
         cur = db.cursor()
+        now = datetime.now()
         cur.execute(
-            """INSERT INTO VEHICLE_LOGS
-               (UID, RFIDS, IMG_1_PATH, IMG_2_PATH, IMG_3_PATH,
-                CREATE_TIME, STATUS)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-            (
-                uid, "|".join(rfids),
-                f"{SAVE_PATH}{uid}/CAM1/",
-                f"{SAVE_PATH}{uid}/CAM2/",
-                f"{SAVE_PATH}{uid}/CAM3/",
-                datetime.now(), "IN_PROGRESS"
-            )
+            """
+            INSERT INTO VEHICLE_LOGS
+                (UID, RFIDS, STATUS, CREATE_TIME)
+            VALUES
+                (%s, %s, %s, %s,)
+            """,
+            (uid, "|".join(rfids), "IN_PROGRESS", now,)
         )
         db.commit()
+        print(f"[DB] Log created  uid={uid}  rfids={rfids}")
         return True
     except Exception as e:
         print(f"[DB] db_create_log error: {e}")
         return False
     finally:
         if db: db.close()
-
+ 
 def db_complete_log(uid: str) -> bool:
     db = None
     try:
         db  = _db_connect()
         cur = db.cursor()
         cur.execute(
-            "UPDATE VEHICLE_LOGS SET STATUS = 'COMPLETED' WHERE UID = %s",
-            (uid,)
+            """
+            UPDATE VEHICLE_LOGS
+               SET STATUS = 'COMPLETED', UPDATE_TIME = %s
+             WHERE UID = %s
+            """,
+            (datetime.now(), uid)
         )
         db.commit()
         return True
@@ -125,7 +149,6 @@ def db_complete_log(uid: str) -> bool:
     finally:
         if db: db.close()
 
-# ══════════════════════════════════════════════════════════════════════════════
 class Manager:
 
     def __init__(self):
