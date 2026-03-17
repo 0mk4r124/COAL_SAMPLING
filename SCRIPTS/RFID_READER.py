@@ -36,18 +36,20 @@ def main():
                     rfid = data.decode(errors="ignore").strip()
                     rfid = str(rfid)[1:]
 
-                    print(f"[RFID_READER] Tag raw={raw}  decoded={rfid!r}")
+                    if len(rfid)<30:
 
-                    if not session_active:
-                        session_uid   = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
-                        last_seen = time.time()
-                        session_active = True
-                        rfids = set()
-                        print(f"[RFID_READER] Session started: {session_uid}")
+                        print(f"[RFID_READER] Tag raw={raw}  decoded={rfid!r}")
 
-                    if rfid not in rfids:
-                        last_seen = time.time() 
-                        rfids.add(rfid)
+                        if not session_active:
+                            session_uid   = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
+                            last_seen = time.time()
+                            session_active = True
+                            rfids = set()
+                            print(f"[RFID_READER] Session started: {session_uid}")
+
+                        if rfid not in rfids:
+                            last_seen = time.time() 
+                            rfids.add(rfid)
 
             except socket.timeout: pass
             except Exception as e:
@@ -70,7 +72,9 @@ def main():
                     session_uid = None
                     last_seen = None
                     rfids = set()
-                    time.sleep(500)
+                    end_time = time.time()
+                    while (time.time() - end_time) < 300:
+                        data = s.recv(BUFFER_SIZE)
 
 
 if __name__ == "__main__":

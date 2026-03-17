@@ -4,7 +4,7 @@ from DEPENDANT.SNAP7 import PLCCOMMINCATION
 from DEPENDANT.MQTT import MQTT
 
 
-PLC_IP = "192.168.1.2"
+PLC_IP = "192.168.1.1"
 
 DB_READ = 24
 DB_WRITE = 23
@@ -43,15 +43,48 @@ class SamplerController:
 
         try:
             x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
-            x_reverse = self.plc.readIntFromPLC(self.client, X_REVERSE_SENSOR_FB)
+            y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
             z_up = self.plc.readIntFromPLC(self.client, Z_UP_SENSOR_FB)
-            if x_forward == 1 and x_reverse == 1 and z_up == 1:
+            # x_reverse = self.plc.readIntFromPLC(self.client, X_REVERSE_SENSOR_FB)
+            # y_left = self.plc.readIntFromPLC(self.client, Y_LEFT_SENSOR_FB)
+            # z_down = self.plc.readIntFromPLC(self.client, Z_DOWN_SENSOR_FB)
+            if x_forward == 1 and y_right == 1 and z_up == 1:
                 return True
 
         except Exception as e:
             print(f"[PLC_SAMPLER] Sensor read error: {e}")
+
         return False
 
+    def move_home(self):
+
+        try:
+            while True:
+                x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
+                y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
+                z_up = self.plc.readIntFromPLC(self.client, Z_UP_SENSOR_FB)
+
+                time.sleep(0.5)
+                if x_forward == 1: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
+                else: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
+
+                time.sleep(0.5)
+                if y_right == 1: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
+                else: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
+
+                # time.sleep(0.5)
+                # if z_up == 1: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
+                # else: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
+
+                if (x_forward == 1) and (y_right == 1): # and (z_up == 1):
+                    return True 
+
+                time.sleep(0.5)
+                    
+        except Exception as e:
+            print(f"[PLC_SAMPLER] Sensor read error: {e}")
+
+        return False
 
     def move_x_reverse(self, duration):
 
@@ -59,13 +92,38 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving X Axis Reverse")
             start_time = time.time()
             while (time.time() - start_time) < duration:
-                self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 1)
+                x_reverse = self.plc.readIntFromPLC(self.client, X_REVERSE_SENSOR_FB)
+                if x_reverse == 0: self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 1)
+                else: break
                 time.sleep(0.05)
+            time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 0)
+            time.sleep(0.5)
 
         except Exception as e:
 
             msg = f"X reverse movement error: {e}"
+            print(f"[PLC_SAMPLER] {msg}")
+            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+            raise
+
+    def move_x_forward(self, duration):
+
+        try:
+            print("[PLC_SAMPLER] Moving X Axis Forward")
+            start_time = time.time()
+            while (time.time() - start_time) < duration:
+                x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
+                if x_forward == 0: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
+                else: break
+                time.sleep(0.05)
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
+            time.sleep(0.5)
+
+        except Exception as e:
+
+            msg = f"X forward movement error: {e}"
             print(f"[PLC_SAMPLER] {msg}")
             self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
             raise
@@ -77,13 +135,38 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving Y Axis Left")
             start_time = time.time()
             while (time.time() - start_time) < duration:
-                self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 1)
+                y_left = self.plc.readIntFromPLC(self.client, Y_LEFT_SENSOR_FB)
+                if y_left == 0: self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 1)
+                else: break
                 time.sleep(0.05)
+            time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 0)
+            time.sleep(0.5)
 
         except Exception as e:
 
             msg = f"Y left movement error: {e}"
+            print(f"[PLC_SAMPLER] {msg}")
+            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+            raise
+
+    def move_y_right(self, duration):
+
+        try:
+            print("[PLC_SAMPLER] Moving Y Axis Right")
+            start_time = time.time()
+            while (time.time() - start_time) < duration:
+                y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
+                if y_right == 0: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
+                else: break
+                time.sleep(0.05)
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
+            time.sleep(0.5)
+
+        except Exception as e:
+
+            msg = f"Y right movement error: {e}"
             print(f"[PLC_SAMPLER] {msg}")
             self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
             raise
@@ -130,7 +213,14 @@ class SamplerController:
 
         try:
             print("[PLC_SAMPLER] Waiting for sensors")
+            duration = 120
+            start_time = time.time()
             while True:
+                if (time.time() - start_time) > duration:
+                    print("[PLC_SAMPLER] Sensors not ready")
+                    msg = "Error"
+                    self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+                    break
 
                 if self.sensors_ready():
                     print("[PLC_SAMPLER] Sensors ready")
@@ -160,25 +250,57 @@ class SamplerController:
                 if data and data.get("_consumed") is not True:
 
                     action = data.get("action", "")
+                    part = data.get("part", 0)
                     self.mqtt.data = {**data, "_consumed": True}
 
+                    # if action == "move_x_reverse":
+                    #     self.move_x_reverse((part*self.total_x)/100)
+                    # elif action == "move_x_forward":
+                    #     self.move_x_forward((part*self.total_x)/100)
+                    # elif action == "move_y_left":
+                    #     self.move_y_left((part*self.total_y)/100)
+                    # elif action == "move_y_right":
+                    #     self.move_y_right((part*self.total_y)/100)
+                    # elif action == "move_home":
+                    #     self.move_home()
+                    # elif action == "sensors_ready":
+                    #     self.sensors_ready()
+
                     if action == "sample_cycle_1":
-                        x_time = (4 * self.total_x) / 5
-                        self.run_cycle(x_time)
-                        self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_1_comp"})
+                        if self.move_home():
+                            self.move_x_reverse((75*self.total_x)/100)
+                            self.move_y_left((50*self.total_y)/100)
+                            self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_1_comp"})
                     elif action == "sample_cycle_2":
-                        x_time = (3 * self.total_x) / 5
-                        self.run_cycle(x_time)
-                        self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_2_comp"})
+                        if self.move_home():
+                            self.move_x_reverse((50*self.total_x)/100)
+                            self.move_y_left((50*self.total_y)/100)
+                            self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_2_comp"})
                     elif action == "sample_cycle_3":
-                        x_time = (2 * self.total_x) / 5
-                        self.run_cycle(x_time)
-                        self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
+                        if self.move_home():
+                            self.move_x_reverse((25)/100)
+                            self.move_y_left((50*self.total_y)/100)
+                            self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
                     elif action == "sample_cycle_stop":
-                        self.stop_cycle()
                         self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_stop_comp"})
-                    else:
-                        print(f"[PLC_SAMPLER] Unknown action: {action}")
+
+                    # if action == "sample_cycle_1":
+                    #     x_time = (4 * self.total_x) / 5
+                    #     self.run_cycle(x_time)
+                    #     self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_1_comp"})
+                    # elif action == "sample_cycle_2":
+                    #     x_time = (3 * self.total_x) / 5
+                    #     self.run_cycle(x_time)
+                    #     self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_2_comp"})
+                    # elif action == "sample_cycle_3":
+                    #     x_time = (2 * self.total_x) / 5
+                    #     self.run_cycle(x_time)
+                    #     self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
+                    # elif action == "sample_cycle_stop":
+                    #     self.stop_cycle()
+                    #     self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_stop_comp"})
+                    # else:
+                    #     print(f"[PLC_SAMPLER] Unknown action: {action}")
 
             except Exception as e:
                 msg = f"Loop error: {e}"
@@ -188,8 +310,8 @@ class SamplerController:
             time.sleep(0.05)
 
 def main():
-    total_x = 10
-    total_y = 8
+    total_x = 70
+    total_y = 30
 
     controller = SamplerController(total_x, total_y)
     controller.run()

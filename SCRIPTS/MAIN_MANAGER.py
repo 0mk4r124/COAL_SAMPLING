@@ -147,10 +147,8 @@ def db_error_log(uid: str) -> bool:
             (datetime.now(), uid)
         )
         db.commit()
-        return True
     except Exception as e:
         print(f"[DB] db_complete_log error: {e}")
-        return False
     finally:
         if db: db.close()
 
@@ -168,10 +166,8 @@ def db_complete_log(uid: str) -> bool:
             (datetime.now(), uid)
         )
         db.commit()
-        return True
     except Exception as e:
         print(f"[DB] db_complete_log error: {e}")
-        return False
     finally:
         if db: db.close()
 
@@ -305,7 +301,7 @@ class Manager:
             present = msg.get("present", False)
             if present:
                 print("[MANAGER] Truck placement confirmed.")
-                time.sleep(30)
+                time.sleep(10)
                 self._goto(State.RED_SIGNAL)
             else:
                 print("[MANAGER] Truck removed — resetting.")
@@ -320,14 +316,13 @@ class Manager:
             return
         status = msg.get("status", "")
         if status == "barrier_closed":
-            time.sleep(30)
+            time.sleep(10)
             self._goto(State.CYCLE_CAPTURE)
         elif status == "barrier_error":
             print(f"[MANAGER] Barrier error: {msg.get('msg')}")
             self._goto(State.ERROR)
 
     def _handle_cycle_capture(self):
-
         msg = self._pop("plc_sampler/status")
         if not msg:
             if self.cycle == 0:
@@ -395,6 +390,7 @@ class Manager:
         self._reset()
 
     def _reset(self):
+        db_error_log(self.uid)
         self.uid       = None
         self.rfids     = []
         self.vehicle   = None
