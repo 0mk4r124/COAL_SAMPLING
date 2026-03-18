@@ -278,8 +278,8 @@ class SamplerController:
 
                     if action == "sample_cycle_1":
                         if self.move_home():
-                            self.move_x_reverse((75*self.total_x)/100)
-                            self.move_y_left((50*self.total_y)/100)
+                            self.move_x_reverse((100*self.total_x)/100)
+                            self.move_y_left((100*self.total_y)/100)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_1_comp"})
                     elif action == "sample_cycle_2":
                         if self.move_home():
@@ -289,7 +289,7 @@ class SamplerController:
                     elif action == "sample_cycle_3":
                         if self.move_home():
                             self.move_x_reverse((25*self.total_x)/100)
-                            self.move_y_left((50*self.total_y)/100)
+                            self.move_y_left((25*self.total_y)/100)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
                     elif action == "sample_cycle_stop":
                         # self.stop_cycle()
