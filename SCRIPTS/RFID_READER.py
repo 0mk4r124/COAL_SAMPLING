@@ -73,7 +73,7 @@ def main():
                     last_seen = None
                     rfids = set()
                     end_time = time.time()
-                    while (time.time() - end_time) < 300:
+                    while (time.time() - end_time) < 500:
                         data = s.recv(BUFFER_SIZE)
 
 

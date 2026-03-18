@@ -60,21 +60,30 @@ class SamplerController:
 
         try:
             while True:
-                x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
-                z_up = self.plc.readIntFromPLC(self.client, Z_UP_SENSOR_FB)
 
                 time.sleep(0.5)
-                if x_forward == 1: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
+                if x_forward == 1: 
+                    self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
+                    print(f"[PLC_SAMPLER] Y right is at Home")
+                    break
+                else: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
+                
+            while True:
+                x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
+                time.sleep(0.5)
+                if x_forward == 1: 
+                    self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
+                    print(f"[PLC_SAMPLER] X forward is at Home")
+                    break
                 else: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
 
                 time.sleep(0.5)
-                if y_right == 1: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
-                else: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
 
-                # time.sleep(0.5)
-                # if z_up == 1: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
-                # else: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
+            while True:
+                x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
+                y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
+                z_up = self.plc.readIntFromPLC(self.client, Z_UP_SENSOR_FB)
 
                 if (x_forward == 1) and (y_right == 1): # and (z_up == 1):
                     return True 
