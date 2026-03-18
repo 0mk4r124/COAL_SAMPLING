@@ -1,3 +1,4 @@
+import os
 import time
 import random
 import threading
@@ -118,11 +119,14 @@ def db_create_log(uid: str, rfids: list) -> bool:
         cur.execute(
             """
             INSERT INTO VEHICLE_LOGS
-                (UID, RFIDS, STATUS, CREATE_TIME, UPDATE_TIME)
+                (UID, RFIDS, STATUS, CREATE_TIME, UPDATE_TIME, 
+                IMG_1_PATH, IMG_2_PATH, IMG_3_PATH)
             VALUES
-                (%s, %s, %s, %s, %s)
+                (%s, %s, %s, %s, %s, 
+                %s, %s, %s)
             """,
-            (uid, "|".join(rfids), "IN_PROGRESS", now, now)
+            (uid, "|".join(rfids), "IN_PROGRESS", now, now, 
+            os.path.join(SAVE_PATH, uid, "CAM1"), os.path.join(SAVE_PATH, uid, "CAM2"), os.path.join(SAVE_PATH, uid, "CAM3"))
         )
         db.commit()
         print(f"[DB] Log created  uid={uid}  rfids={rfids}")
@@ -374,7 +378,7 @@ class Manager:
         self._goto(State.COMPLETE)
 
     def _handle_complete(self):
-        print(f"[MANAGER] Session {self.uid} COMPLETE.")
+        print(f"[MANAGER] Session {self.uid} complete.")
         db_complete_log(self.uid)
         time.sleep(10)
         self._cam(action="cam13_stop")
@@ -383,10 +387,10 @@ class Manager:
 
     def _handle_error(self):
         print("[MANAGER] Error state — resetting system.")
+        db_error_log(self.uid)
         self._cam(action="reset")
         self._barrier(action="close_barrier")
         self._sampler(action="reset")
-        db_error_log(self.uid)
         self._reset()
 
     def _reset(self):
