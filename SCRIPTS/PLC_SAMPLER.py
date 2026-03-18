@@ -68,7 +68,7 @@ class SamplerController:
                     print(f"[PLC_SAMPLER] Y right is at Home")
                     break
                 else: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
-                
+
             while True:
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
                 time.sleep(0.5)
@@ -287,29 +287,12 @@ class SamplerController:
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_2_comp"})
                     elif action == "sample_cycle_3":
                         if self.move_home():
-                            self.move_x_reverse((25)/100)
+                            self.move_x_reverse((25*self.total_x)/100)
                             self.move_y_left((50*self.total_y)/100)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
                     elif action == "sample_cycle_stop":
+                        # self.stop_cycle()
                         self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_stop_comp"})
-
-                    # if action == "sample_cycle_1":
-                    #     x_time = (4 * self.total_x) / 5
-                    #     self.run_cycle(x_time)
-                    #     self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_1_comp"})
-                    # elif action == "sample_cycle_2":
-                    #     x_time = (3 * self.total_x) / 5
-                    #     self.run_cycle(x_time)
-                    #     self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_2_comp"})
-                    # elif action == "sample_cycle_3":
-                    #     x_time = (2 * self.total_x) / 5
-                    #     self.run_cycle(x_time)
-                    #     self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
-                    # elif action == "sample_cycle_stop":
-                    #     self.stop_cycle()
-                    #     self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_stop_comp"})
-                    # else:
-                    #     print(f"[PLC_SAMPLER] Unknown action: {action}")
 
             except Exception as e:
                 msg = f"Loop error: {e}"
