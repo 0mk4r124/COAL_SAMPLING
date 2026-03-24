@@ -170,6 +170,7 @@ def db_complete_log(uid: str) -> bool:
             (datetime.now(), uid)
         )
         db.commit()
+        print("DB complete Added !!!!!!")
     except Exception as e:
         print(f"[DB] db_complete_log error: {e}")
     finally:

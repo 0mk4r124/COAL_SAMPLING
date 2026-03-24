@@ -74,7 +74,8 @@ def main():
                     rfids = set()
                     end_time = time.time()
                     while (time.time() - end_time) < 500:
-                        data = s.recv(BUFFER_SIZE)
+                        try: data = s.recv(BUFFER_SIZE)
+                        except: pass
 
 
 if __name__ == "__main__":

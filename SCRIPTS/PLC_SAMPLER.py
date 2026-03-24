@@ -60,16 +60,6 @@ class SamplerController:
 
         try:
             while True:
-                y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
-
-                time.sleep(0.5)
-                if y_right == 1: 
-                    self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
-                    print(f"[PLC_SAMPLER] Y right is at Home")
-                    break
-                else: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
-
-            while True:
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
                 time.sleep(0.5)
                 if x_forward == 1: 
@@ -79,6 +69,16 @@ class SamplerController:
                 else: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
 
                 time.sleep(0.5)
+                
+            while True:
+                y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
+
+                time.sleep(0.5)
+                if y_right == 1: 
+                    self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
+                    print(f"[PLC_SAMPLER] Y right is at Home")
+                    break
+                else: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
 
             while True:
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
@@ -278,18 +278,21 @@ class SamplerController:
 
                     if action == "sample_cycle_1":
                         if self.move_home():
-                            self.move_x_reverse((100*self.total_x)/100)
                             self.move_y_left((100*self.total_y)/100)
+                            self.move_x_reverse((100*self.total_x)/100)
+                            time.sleep(5)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_1_comp"})
                     elif action == "sample_cycle_2":
                         if self.move_home():
-                            self.move_x_reverse((50*self.total_x)/100)
                             self.move_y_left((50*self.total_y)/100)
+                            self.move_x_reverse((50*self.total_x)/100)
+                            time.sleep(5)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_2_comp"})
                     elif action == "sample_cycle_3":
                         if self.move_home():
-                            self.move_x_reverse((25*self.total_x)/100)
                             self.move_y_left((25*self.total_y)/100)
+                            self.move_x_reverse((25*self.total_x)/100)
+                            time.sleep(5)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
                     elif action == "sample_cycle_stop":
                         # self.stop_cycle()
