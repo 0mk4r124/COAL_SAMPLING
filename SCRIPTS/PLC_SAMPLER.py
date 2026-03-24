@@ -16,6 +16,7 @@ Y_LEFT_SENSOR_FB = 4
 Y_RIGHT_SENSOR_FB = 6
 Z_UP_SENSOR_FB = 8
 Z_DOWN_SENSOR_FB = 10
+HEARTBIT = 12
 
 # OUTPUT OFFSETS
 CYCLE_START = 0
@@ -60,7 +61,9 @@ class SamplerController:
 
         try:
             while True:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
+
                 time.sleep(0.5)
                 if x_forward == 1: 
                     self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
@@ -68,9 +71,11 @@ class SamplerController:
                     break
                 else: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
 
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
                 
             while True:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
 
                 time.sleep(0.5)
@@ -79,16 +84,21 @@ class SamplerController:
                     print(f"[PLC_SAMPLER] Y right is at Home")
                     break
                 else: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
 
             while True:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
                 z_up = self.plc.readIntFromPLC(self.client, Z_UP_SENSOR_FB)
 
+                time.sleep(0.5)
                 print(f"[PLC_SAMPLER] Sensor states  x_forward={x_forward}  y_right={y_right}  z_up={z_up}")
                 if (x_forward == 1) and (y_right == 1) and (z_up == 1):
                     return True 
 
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
                     
         except Exception as e:
@@ -102,10 +112,14 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving X Axis Reverse")
             start_time = time.time()
             while (time.time() - start_time) < duration:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_reverse = self.plc.readIntFromPLC(self.client, X_REVERSE_SENSOR_FB)
                 if x_reverse == 0: self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 1)
                 else: break
-                time.sleep(0.05)
+
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
+
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 0)
             time.sleep(0.5)
@@ -123,10 +137,14 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving X Axis Forward")
             start_time = time.time()
             while (time.time() - start_time) < duration:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
                 if x_forward == 0: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
                 else: break
-                time.sleep(0.05)
+
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
+
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
             time.sleep(0.5)
@@ -145,10 +163,14 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving Y Axis Left")
             start_time = time.time()
             while (time.time() - start_time) < duration:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_left = self.plc.readIntFromPLC(self.client, Y_LEFT_SENSOR_FB)
                 if y_left == 0: self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 1)
                 else: break
-                time.sleep(0.05)
+
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
+
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 0)
             time.sleep(0.5)
@@ -166,10 +188,14 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving Y Axis Right")
             start_time = time.time()
             while (time.time() - start_time) < duration:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
                 if y_right == 0: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
                 else: break
-                time.sleep(0.05)
+
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
+
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
             time.sleep(0.5)
@@ -257,6 +283,7 @@ class SamplerController:
             try:
 
                 data = self.mqtt.data
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 if data and data.get("_consumed") is not True:
 
                     action = data.get("action", "")
@@ -280,23 +307,26 @@ class SamplerController:
                         if self.move_home():
                             self.move_y_left((100*self.total_y)/100)
                             self.move_x_reverse((100*self.total_x)/100)
-                            time.sleep(5)
+                            time.sleep(3)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_1_comp"})
                     elif action == "sample_cycle_2":
                         if self.move_home():
                             self.move_y_left((50*self.total_y)/100)
                             self.move_x_reverse((50*self.total_x)/100)
-                            time.sleep(5)
+                            time.sleep(3)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_2_comp"})
                     elif action == "sample_cycle_3":
                         if self.move_home():
                             self.move_y_left((25*self.total_y)/100)
                             self.move_x_reverse((25*self.total_x)/100)
-                            time.sleep(5)
+                            time.sleep(3)
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_3_comp"})
                     elif action == "sample_cycle_stop":
                         # self.stop_cycle()
                         self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_stop_comp"})
+
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
 
             except Exception as e:
                 msg = f"Loop error: {e}"

@@ -15,6 +15,7 @@ TRUN_TABLE_CLOCKWISE = 6
 TRUN_TABLE_VALUE_WRITE = 8
 GREEN_SIGNAL = 10
 RED_SIGNAL = 12
+HEARTBIT = 14
 
 TRUCK_PRESENT1 = 0
 TRUCK_PRESENT2 = 2
@@ -45,12 +46,14 @@ class BarrierController:
             # Poll status bit until confirmed or timeout
             deadline = time.time() + BARRIER_OPEN_TIMEOUT
             while time.time() < deadline:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
                 close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
                 if (open_bit == 1) and (close_bit == 0):
                     print("[PLC_BARRIER] Barrier OPEN confirmed.")
                     self.mqtt.publish(TOPIC_OUT, {"status": "barrier_opened"})
                     return
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
 
             raise TimeoutError("Barrier did not open within timeout.")
@@ -70,12 +73,14 @@ class BarrierController:
 
             deadline = time.time() + BARRIER_OPEN_TIMEOUT
             while time.time() < deadline:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
                 close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
                 if (open_bit == 0) and (close_bit == 1):
                     print("[PLC_BARRIER] Barrier OPEN confirmed.")
                     self.mqtt.publish(TOPIC_OUT, {"status": "barrier_closed"})
                     return
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
 
             self.mqtt.publish(TOPIC_OUT, {"status": "barrier_closed"})
@@ -113,24 +118,29 @@ class BarrierController:
             self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 1)
 
             while True:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 home_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_HOME_P)
                 if home_bit == 1:
                     self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 0)
-                    time.sleep(5)
+                    time.sleep(2)
                     break
                 else: self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 1)
 
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
                 
             self.plc.writeIntToPLC(self.client, TRUN_TABLE_VALUE_WRITE, bucket_number)
             self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 1)
 
             while True:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 bucket_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_COUNT_READ)
                 if bucket_bit == bucket_number: 
                     self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 0)
                     self.mqtt.publish(TOPIC_OUT, {"status": "bucket_set"})
                     break
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
 
         except Exception as e:
             msg = f"Green Signal error: {e}"
@@ -157,6 +167,8 @@ class BarrierController:
 
         while True:
             try:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+
                 data = self.mqtt.data
 
                 if data and data.get("_consumed") is not True:
@@ -171,7 +183,7 @@ class BarrierController:
                     elif action == "check_truck":
                         if self.truck_present():
                             self.mqtt.publish(TOPIC_OUT, {"status": "truck", "present": True})
-                            time.sleep(5)
+                            time.sleep(2)
                     elif action == "set_bucket":
                         print(f"[PLC_BARRIER] Setting Bucket")
                         self.set_bucket(bucket_no)
@@ -181,6 +193,9 @@ class BarrierController:
                         self.red_signal()
                     else:
                         print(f"[PLC_BARRIER] Unknown action: {action}")
+
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
 
             except Exception as e:
                 print(f"[PLC_BARRIER] Loop error: {e}")
