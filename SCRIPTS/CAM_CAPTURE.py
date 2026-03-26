@@ -2,11 +2,13 @@ import os
 import time
 import threading
 import cv2
+from datetime import datetime
 
 from DEPENDANT.IP   import IPCamera
 from DEPENDANT.MQTT import MQTT
 
-SAVE_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
+TEMP_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
+RAW_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RAW_IMG/"
 
 CAM_CONFIGS = {
     "CAM1": {"ip": "192.168.1.201", "user": "admin", "password": "insightzz@123", "name": "CAM1"},
@@ -16,16 +18,20 @@ CAM_CONFIGS = {
 
 TOPIC_IN  = "manager/camera"
 TOPIC_OUT = "camera/status"
-CAM13_INTERVAL = 0.5
+CAM_CAPTURE_INTERVAL = 1.0  # Capture every 1 second
+THREAD_HEALTH_CHECK_INTERVAL = 5.0  # Check thread health every 5 seconds
 
+def save_frame(img, path: str) -> str:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cv2.imwrite(path, img)
+    return path
 
-def save_frame(img, uid: str, cam_name: str, cycle: int = 0) -> str:
-    folder = os.path.join(SAVE_PATH, uid, cam_name, f"cycle_{cycle}" if cycle else "")
-    os.makedirs(folder, exist_ok=True)
-    filename = os.path.join(folder, f"{cam_name}_{int(time.time() * 1000)}.jpg")
-    cv2.imwrite(filename, img)
-
-    return filename
+def save_frame_reduced(img, path: str, scale: float = 0.5) -> str:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    h, w = img.shape[:2]
+    reduced = cv2.resize(img, (int(w * scale), int(h * scale)))
+    cv2.imwrite(path, reduced)
+    return path
 
 class CamController:
 
@@ -34,119 +40,268 @@ class CamController:
         self.mqtt   = MQTT("CAM_CAPTURE")
         self._lock  = threading.Lock()
 
-        self._cam13_active = False
-        self._cam13_uid    = None
-        self._cam13_cycle  = 0
+        # Background capture threads for each camera
+        self._bg_threads = {
+            "CAM1": None,
+            "CAM2": None,
+            "CAM3": None,
+        }
+        self._bg_active = True
+        self._last_frame = {
+            "CAM1": None,
+            "CAM2": None,
+            "CAM3": None,
+        }
+        self._thread_last_alive = {
+            "CAM1": time.time(),
+            "CAM2": time.time(),
+            "CAM3": time.time(),
+        }
 
-        self._thread: threading.Thread | None = None
+        # Sample capture state (saves to RAW path)
+        self._sample_capture_active = False
+        self._sample_capture_uid = None
 
     def initialize(self):
         for name, cam in self.cams.items():
             ok = cam.initialize()
             print(f"[CAM_CAPTURE] {name} init  {'OK' if ok else 'FAILED'}")
 
-    def _on_command(self, action: str, uid: str, cycle: int):
+    def _capture(self, cam_name: str, save_path: str) -> str:
+        for _ in range(3):  # Retry up to 3 times
+            try:
+                img = self.cams[cam_name].capture(save=False)
+                if img is not None:
+                    path = save_frame(img, save_path)
+                    print(f"[CAM_CAPTURE] {cam_name} single capture saved: {path}")
+                    return path
+                else:
+                    print(f"[CAM_CAPTURE] {cam_name} capture returned None")
+            except Exception as e:
+                print(f"[CAM_CAPTURE] {cam_name} single capture error: {e}")
+            time.sleep(0.05)  # Wait before retrying
 
-        print(f"[CAM_CAPTURE] Command  action={action}  uid={uid}  cycle={cycle}")
+    def _bg_capture_loop(self, cam_name: str):
+        print(f"[CAM_CAPTURE] {cam_name} background capture thread started")
+        
+        while self._bg_active:
+            try:
+                img = self.cams[cam_name].capture(save=False)
+                if img is not None:
+                    with self._lock:
+                        self._last_frame[cam_name] = img
+                        self._thread_last_alive[cam_name] = time.time()
+                    
+                    # Generate filename with timestamp
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                    temp_full_path = os.path.join(TEMP_PATH, f"{cam_name}_FULL_{timestamp}.jpg")
+                    temp_reduced_path = os.path.join(TEMP_PATH, f"{cam_name}_REDUCED_{timestamp}.jpg")
+                    
+                    # Save full resolution
+                    # save_frame(img, temp_full_path)
+                    # Save 50% reduced resolution for quick loading
+                    save_frame_reduced(img, temp_reduced_path, scale=0.5)
+                    
+                    print(f"[CAM_CAPTURE] {cam_name} captured: full={temp_full_path}, reduced={temp_reduced_path}")
+                
+            except Exception as e:
+                print(f"[CAM_CAPTURE] {cam_name} background capture error: {e}")
+            
+            time.sleep(CAM_CAPTURE_INTERVAL)
+        
+        print(f"[CAM_CAPTURE] {cam_name} background capture thread stopped")
 
-        if action == "cam2_single":
-            self._capture_cam2(uid)
-        elif action == "cam13_start":
-            self._start_cam13(uid, cycle)
-        elif action in ("cam13_stop", "reset"):
-            self._stop_cam13()
+    def _sample_capture_loop(self, cam_name: str, uid: str):
+        print(f"[CAM_CAPTURE] {cam_name} sample capture thread started (uid={uid})")
+        
+        count = 0
+        while self._sample_capture_active:
+            try:
+                img = self.cams[cam_name].capture(save=False)
+                if img is not None:
+                    # Generate filename: uid_TIMESTAMP.jpg
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                    raw_path = os.path.join(RAW_PATH, uid, cam_name)
+                    raw_file = os.path.join(raw_path, f"{uid}_{timestamp}_{count:04d}.jpg")
+                    
+                    # Save full resolution to raw path
+                    save_frame(img, raw_file)
+                    count += 1
+                    
+                    print(f"[CAM_CAPTURE] {cam_name} sampled ({count}): {raw_file}")
+                
+            except Exception as e:
+                print(f"[CAM_CAPTURE] {cam_name} sample capture error: {e}")
+            
+            time.sleep(0.1)  # Capture frequently for sample
+        
+        print(f"[CAM_CAPTURE] {cam_name} sample capture thread stopped (total: {count})")
+
+    def _start_sample_capture(self, uid: str):
+        with self._lock:
+            if self._sample_capture_active:
+                print("[CAM_CAPTURE] Sample capture already active")
+                return
+            
+            self._sample_capture_active = True
+            self._sample_capture_uid = uid
+        
+        # Start sample capture threads for all 3 cameras
+        for cam_name in ("CAM1", "CAM2", "CAM3"):
+            thread = threading.Thread(
+                target=self._sample_capture_loop,
+                args=(cam_name, uid),
+                daemon=True
+            )
+            thread.start()
+        
+        print(f"[CAM_CAPTURE] Sample capture started (uid={uid})")
+        self.mqtt.publish(TOPIC_OUT, {
+            "action": "sample_capture_started", "uid": uid
+        })
+
+    def _stop_sample_capture(self):
+        with self._lock:
+            if not self._sample_capture_active:
+                print("[CAM_CAPTURE] Sample capture not active")
+                return
+            
+            uid = self._sample_capture_uid
+            self._sample_capture_active = False
+        
+        # Wait a bit for threads to finish
+        time.sleep(0.5)
+        
+        print(f"[CAM_CAPTURE] Sample capture stopped (uid={uid})")
+        self.mqtt.publish(TOPIC_OUT, {
+            "action": "sample_capture_stopped", "uid": uid
+        })
+
+    def _on_command(self, action: str, uid: str, cam: str = "", path: str = ""):
+        print(f"[CAM_CAPTURE] Command: action={action}, uid={uid}, cam={cam}, path={path}")
+
+        if action == "cam1_single":
+            if path:
+                filepath = self._capture("CAM1", path)
+                if filepath:
+                    self.mqtt.publish(TOPIC_OUT, {
+                        "action": "cam1_done", "uid": uid, "path": filepath
+                    })
+            else:
+                print("[CAM_CAPTURE] cam1_single: path not provided")
+        
+        elif action == "cam2_single":
+            if path:
+                filepath = self._capture("CAM2", path)
+                if filepath:
+                    self.mqtt.publish(TOPIC_OUT, {
+                        "action": "cam2_done", "uid": uid, "path": filepath
+                    })
+            else:
+                print("[CAM_CAPTURE] cam2_single: path not provided")
+        
+        elif action == "cam3_single":
+            if path:
+                filepath = self._capture("CAM3", path)
+                if filepath:
+                    self.mqtt.publish(TOPIC_OUT, {
+                        "action": "cam3_done", "uid": uid, "path": filepath
+                    })
+            else:
+                print("[CAM_CAPTURE] cam3_single: path not provided")
+        
+        elif action == "sample_capture_start":
+            self._start_sample_capture(uid)
+        
+        elif action == "sample_capture_stop":
+            self._stop_sample_capture()
+        
+        elif action == "reset":
+            self._stop_sample_capture()
+            print("[CAM_CAPTURE] Reset complete")
+        
         else:
             print(f"[CAM_CAPTURE] Unknown action: {action}")
 
-    def _capture_cam2(self, uid: str):
-        try:
-            img = self.cams["CAM2"].capture(save=False)
-            if img is None:
-                raise RuntimeError("CAM2 returned None")
-            path = save_frame(img, uid, "CAM2", cycle=0)
-            print(f"[CAM_CAPTURE] CAM2 saved  {path}")
-            self.mqtt.publish(TOPIC_OUT, {
-                "action": "cam2_done", "uid": uid, "cycle": 0, "path": path
-            })
-        except Exception as e:
-            print(f"[CAM_CAPTURE] CAM2 error: {e}")
-            self.mqtt.publish(TOPIC_OUT, {"action": "error", "msg": str(e)})
-
-    def _start_cam13(self, uid: str, cycle: int):
-        with self._lock:
-            self._cam13_active = True
-            self._cam13_uid    = uid
-            self._cam13_cycle  = cycle
-
-        # Re-use existing thread if already running, else spawn a new one
-        if self._thread is None or not self._thread.is_alive():
-            self._thread = threading.Thread(
-                target=self._cam13_loop, daemon=True)
-            self._thread.start()
-
-    def _stop_cam13(self):
-        with self._lock:
-            self._cam13_active = False
-        print("[CAM_CAPTURE] CAM1/CAM3 capture stopped.")
-
-    def _cam13_loop(self):
-        print("[CAM_CAPTURE] CAM1/CAM3 loop started.")
-
-        while True:
-            with self._lock:
-                active = self._cam13_active
-                uid    = self._cam13_uid
-                cycle  = self._cam13_cycle
-
-            if not active:
-                break
-
-            for name in ("CAM1", "CAM3"):
-                try:
-                    img = self.cams[name].capture(save=False)
-                    if img is not None:
-                        save_frame(img, uid, name, cycle)
-                except Exception as e:
-                    print(f"[CAM_CAPTURE] {name} capture error: {e}")
-
-            time.sleep(CAM13_INTERVAL)
-
-        # Notify manager that continuous capture has finished
-        with self._lock:
-            uid   = self._cam13_uid
-            cycle = self._cam13_cycle
-        self.mqtt.publish(TOPIC_OUT, {
-            "action": "cam13_done", "uid": uid, "cycle": cycle
-        })
-        print(f"[CAM_CAPTURE] CAM1/CAM3 done — uid={uid}, cycle={cycle}")
+    def _check_thread_health(self):
+        current_time = time.time()
+        
+        for cam_name in ("CAM1", "CAM2", "CAM3"):
+            thread = self._bg_threads[cam_name]
+            
+            # Check if thread is dead or hasn't reported alive recently
+            time_since_alive = current_time - self._thread_last_alive[cam_name]
+            is_thread_dead = thread is None or not thread.is_alive()
+            is_stale = time_since_alive > (THREAD_HEALTH_CHECK_INTERVAL * 2)
+            
+            if is_thread_dead or is_stale:
+                print(f"[CAM_CAPTURE] {cam_name} thread is dead or stale — restarting …")
+                
+                # Reset alive timestamp
+                self._thread_last_alive[cam_name] = current_time
+                
+                # Create and start new background thread
+                thread = threading.Thread(
+                    target=self._bg_capture_loop,
+                    args=(cam_name,),
+                    daemon=True
+                )
+                thread.start()
+                self._bg_threads[cam_name] = thread
 
     def run(self):
         self.initialize()
         self.mqtt.subscribe(TOPIC_IN)
 
-        print("[CAM_CAPTURE] Waiting for commands …")
+        # Start background capture threads for all 3 cameras (always running)
+        print("[CAM_CAPTURE] Starting background capture threads for all cameras …")
+        for cam_name in ("CAM1", "CAM2", "CAM3"):
+            thread = threading.Thread(
+                target=self._bg_capture_loop,
+                args=(cam_name,),
+                daemon=True
+            )
+            thread.start()
+            self._bg_threads[cam_name] = thread
+
+        print("[CAM_CAPTURE] Ready, waiting for commands …")
+        last_health_check = time.time()
 
         while True:
             try:
+                # Check thread health periodically and restart if dead
+                current_time = time.time()
+                if current_time - last_health_check >= THREAD_HEALTH_CHECK_INTERVAL:
+                    self._check_thread_health()
+                    last_health_check = current_time
+
+                # Process incoming MQTT commands
                 data = self.mqtt.data
                 if data and data.get("_consumed") is not True:
                     action = data.get("action", "")
                     uid    = data.get("uid",    "")
-                    cycle  = data.get("cycle",  0)
+                    path   = data.get("path",   "")  # Path provided from MQTT for single capture
+                    cam    = data.get("cam",    "")
                     
-                    # Mark consumed to avoid reprocessing the same message
+                    # Mark consumed immediately
                     self.mqtt.data = {**data, "_consumed": True}
-                    self._on_command(action, uid, cycle)
+                    
+                    # Process command in separate thread to not block health checks
+                    cmd_thread = threading.Thread(
+                        target=self._on_command,
+                        args=(action, uid, cam, path),
+                        daemon=True
+                    )
+                    cmd_thread.start()
+
             except Exception as e:
                 print(f"[CAM_CAPTURE] Loop error: {e}")
 
             time.sleep(0.05)
 
-
 def main():
     controller = CamController()
     controller.run()
-
 
 if __name__ == "__main__":
     main()
