@@ -238,6 +238,12 @@ class Manager:
 
     def _handle_db_check(self):
         valid_rfid, vehicle = self._resolve_rfid(self.rfids)
+
+        if db_vehicle_already_in_front("|".join(self.rfids)):
+            print("[MANAGER] Vehicle already in front — aborting.")
+            self._reset()
+            return
+        
         db_create_log(self.uid, self.rfids)
         print("[MANAGER] RFID not in DB — will poll …")
         self._db_last_polled = time.time()

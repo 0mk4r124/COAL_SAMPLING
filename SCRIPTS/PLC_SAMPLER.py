@@ -283,6 +283,8 @@ class SamplerController:
             try:
 
                 data = self.mqtt.data
+                # X_FORWORD_SENSOR_FB
+                # self.plc.writeIntToPLC(self.client, 0, 1)
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 if data and data.get("_consumed") is not True:
 
