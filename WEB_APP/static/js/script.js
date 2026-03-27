@@ -7,6 +7,12 @@ let currentOpenedBunch = null;
 let isImageLoading = false;
 let modalOpen = false;
 
+// State management variables
+let currentUID = null;
+let emergencyModalOpen = false;
+let autoManualModalOpen = false;
+let statusCheckInterval = null;
+
 const img = document.getElementById("modalImage");
 const wrapper = document.getElementById("zoomWrapper");
 const modalElement = document.getElementById('vehicleDetailsModal');
@@ -28,6 +34,188 @@ function getCookie(name) {
 }
 
 const csrftoken = getCookie("csrftoken");
+
+// ════════════════════════════════════════════════════════════════════════════
+// STATE AND STATUS MANAGEMENT
+// ════════════════════════════════════════════════════════════════════════════
+
+function updateCurrentStatus() {
+    "use strict";
+    fetch('/api/get_current_status/')
+        .then(response => response.json())
+        .then(data => {
+            // Update state display
+            document.getElementById('currentState').textContent = data.current_state || 'IDLE';
+            document.getElementById('dashVendorName').textContent = data.vendor_name || 'NOT FOUND';
+            document.getElementById('dashVehicleNumber').textContent = data.vehicle_number || 'NOT FOUND';
+            
+            currentUID = data.uid;
+            
+            // Handle emergency status
+            if (data.emergency === 'active' && !emergencyModalOpen) {
+                emergencyModalOpen = true;
+                autoManualModalOpen = false;
+                showEmergencyModal();
+            } else if (data.emergency === null && emergencyModalOpen) {
+                // Emergency was just cleared
+                emergencyModalOpen = false;
+                if (data.emergency_acknowledged) {
+                    showEmergencyClearedModal();
+                }
+            }
+            
+            // Handle auto_manual status
+            if (data.auto_manual === 'manual' && !autoManualModalOpen) {
+                autoManualModalOpen = true;
+                emergencyModalOpen = false;
+                showAutoManualModal();
+            }
+        })
+        .catch(err => console.error("Status update failed:", err));
+}
+
+function showEmergencyModal() {
+    const emergencyModal = new bootstrap.Modal(document.getElementById('emergencyModal'));
+    emergencyModal.show();
+}
+
+function showEmergencyClearedModal() {
+    const emergencyClearedModal = new bootstrap.Modal(document.getElementById('emergencyClearedModal'));
+    emergencyClearedModal.show();
+}
+
+function showAutoManualModal() {
+    const autoManualModal = new bootstrap.Modal(document.getElementById('autoManualModal'));
+    autoManualModal.show();
+}
+
+function handleEmergencyRetake() {
+    // User wants to retake cycles after emergency
+    fetch('/api/acknowledge_emergency/', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': csrftoken,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            uid: currentUID,
+            retake_cycles: true
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            bootstrap.Modal.getInstance(document.getElementById('emergencyClearedModal')).hide();
+            alert('Cycles will be retaken. System resuming...');
+        }
+    })
+    .catch(err => console.error(err));
+}
+
+function handleEmergencySkip() {
+    // User wants to skip cycles after emergency
+    fetch('/api/acknowledge_emergency/', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': csrftoken,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            uid: currentUID,
+            retake_cycles: false
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            bootstrap.Modal.getInstance(document.getElementById('emergencyClearedModal')).hide();
+            alert('Vehicle marked as completed without additional cycles. System resuming...');
+        }
+    })
+    .catch(err => console.error(err));
+}
+
+function handleAutoManualContinue() {
+    // User wants to continue with automatic cycles
+    fetch('/api/acknowledge_auto_manual/', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': csrftoken,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            uid: currentUID,
+            user_action: 'continue'
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            bootstrap.Modal.getInstance(document.getElementById('autoManualModal')).hide();
+            alert('Continuing with automatic cycles...');
+        }
+    })
+    .catch(err => console.error(err));
+}
+
+function handleAutoManualSkip() {
+    // User wants to skip all cycles
+    fetch('/api/acknowledge_auto_manual/', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': csrftoken,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            uid: currentUID,
+            user_action: 'skip_all_cycles'
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            bootstrap.Modal.getInstance(document.getElementById('autoManualModal')).hide();
+            alert('Skipping remaining cycles. Vehicle will be marked as completed...');
+        }
+    })
+    .catch(err => console.error(err));
+}
+
+function resetSystemConfirm() {
+    const resetModal = new bootstrap.Modal(document.getElementById('resetConfirmModal'));
+    resetModal.show();
+}
+
+function confirmResetSystem() {
+    if (!currentUID) {
+        alert('No active vehicle. Cannot reset.');
+        return;
+    }
+    
+    fetch('/api/reset_system/', {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': csrftoken,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ uid: currentUID })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            bootstrap.Modal.getInstance(document.getElementById('resetConfirmModal')).hide();
+            alert('System has been reset. All processes marked as ERROR. Ready for next vehicle.');
+            // Refresh status
+            updateCurrentStatus();
+        } else {
+            alert('Error: ' + (res.error || 'Unknown error'));
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        alert('Error resetting system');
+    });
+}
 
 // Reset zoom & position whenever modal opens
 document.getElementById("imageModal").addEventListener("shown.bs.modal", () => {
@@ -425,6 +613,10 @@ setInterval(checkVehicle, 5000);
 document.addEventListener('DOMContentLoaded', function() {
     fetchSystemStatus();
     
-    // Update every 10 seconds
+    // Update system health status every 10 seconds
     setInterval(fetchSystemStatus, 10000);
+    
+    // Update current state and emergency/auto_manual status every 2 seconds
+    updateCurrentStatus(); // Initial check
+    setInterval(updateCurrentStatus, 2000);
 });

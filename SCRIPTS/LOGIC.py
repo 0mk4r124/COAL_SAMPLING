@@ -385,11 +385,10 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         qr_img = qr.make_image(fill_color="black", back_color="white")
         
         os.makedirs(save_path, exist_ok=True)
-        qr_path = os.path.join(save_path, f"QR_{uid}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-        qr_img.save(qr_path)
+        qr_img.save(save_path)
         
-        print(f"[LOGIC] QR code generated: {qr_path}")
-        return qr_path
+        print(f"[LOGIC] QR code generated: {save_path}")
+        return save_path
     except Exception as e:
         print(f"[LOGIC] Error generating QR code: {e}")
         return ""
