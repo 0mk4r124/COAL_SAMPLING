@@ -5,7 +5,7 @@ from datetime import datetime
 from DEPENDANT.INFERENCE import MASKRCNN
 
 # AI Model Initialization 
-BASE_DIR = '/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/'
+BASE_DIR = 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/'
 MODEL_CONFIG_PATH = BASE_DIR + 'SCRIPTS/configs/COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml'
 MODEL_PATH = BASE_DIR + 'MODEL/COAL_SAMPLING_23MAR/'
 MODEL_FILE = 'model_final.pth'
