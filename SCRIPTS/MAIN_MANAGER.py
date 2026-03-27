@@ -327,14 +327,16 @@ class Manager:
         self.positions : list        = []
         self.cycle     : int         = 0
         self.date_file : str         = ""
+        self.ai_model  : bool        = False
         self._emergency_return_state: State | None = State.CYCLE_CONFIRM  # Track which state to resume to after emergency
 
         self._state_entered_at: float = 0.0
         self._db_last_polled  : float = 0.0
         
         # AI Model initialization
-        if not initialize_ai_model():
-            print("[MANAGER] Warning: AI Model initialization failed")
+        if initialize_ai_model():
+            self.ai_model = True
+            print("[MANAGER] Warning: AI Model initialized")
         
         # Sampling position index tracker
         self._current_sample_index = 0
@@ -726,8 +728,9 @@ class Manager:
         
         if msg and msg.get("status") == "position_set":
             print("[MANAGER] Auger positioned — waiting for AI confirmation …")
-            try: self._confirm_auger_position_with_movement_loop(self.positions[self._current_sample_index]["area"])
-            except: pass
+            if self.ai_model:
+                try: self._confirm_auger_position_with_movement_loop(self.positions[self._current_sample_index]["area"])
+                except: pass
             self._goto(State.CYCLE_CAPTURE)
             return
         
