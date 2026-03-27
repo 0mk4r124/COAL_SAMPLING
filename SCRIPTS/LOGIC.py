@@ -161,6 +161,23 @@ def confirm_auger_position(cam1_image_path: str, cam2_image_path: str, target_ar
         return False
 
 def _validate_cam1_region(image_path: str) -> bool:
+    """
+    Validate that ONLY COAL and TRUCK_BODY objects overlap with the region of interest.
+    
+    The region box contains the auger placement area. We want to ensure that within this
+    region, there are no unwanted objects - only COAL and optionally TRUCK_BODY.
+    
+    Logic:
+        1. Define region of interest (bottom-middle box)
+        2. For each detected object, check if it overlaps with the region
+        3. Only allow COAL and TRUCK_BODY objects to overlap
+        4. If ANY other object overlaps the region, return False
+        5. If only COAL/TRUCK_BODY overlap (or no overlap at all), return True
+    
+    Returns:
+        True if region contains only COAL/TRUCK_BODY (allowed objects)
+        False if any other object type overlaps the region
+    """
     try:
         image = cv2.imread(image_path)
         if image is None:
@@ -171,7 +188,7 @@ def _validate_cam1_region(image_path: str) -> bool:
         height, width = image.shape[:2]
         print(f"[LOGIC] CAM1 Image dimensions: {width}x{height}")
         
-        # Define bottom-middle region bounds
+        # Define bottom-middle region bounds (region of interest for auger placement)
         x_start = int(width * 0.35)      # 35% from left
         x_end = int(width * 0.65)        # 65% from left
         y_start = int(height * 0.50)     # 50% from top
@@ -179,24 +196,26 @@ def _validate_cam1_region(image_path: str) -> bool:
         
         region_width = x_end - x_start
         region_height = y_end - y_start
-        region_area = region_width * region_height
         
-        print(f"[LOGIC] Bottom-middle region: x=[{x_start}-{x_end}], y=[{y_start}-{y_end}]")
-        print(f"[LOGIC] Region dimensions: {region_width}x{region_height} ({region_area} pixels)")
-        cv2.rectangle(vis_img, (x_start, y_start), (x_end, y_end), (0, 255, 255), 2)
-        cv2.imwrite("test.jpg", vis_img)
+        print(f"[LOGIC] CAM1: Region of interest x=[{x_start}-{x_end}], y=[{y_start}-{y_end}]")
+        print(f"[LOGIC] CAM1: Region size: {region_width}x{region_height}")
+        cv2.rectangle(vis_img, (x_start, y_start), (x_end, y_end), (0, 255, 255), 3)
         
         # Run inference on full image
         masked_img, labellist = _inference_model.run_inference(image)
-        cv2.imwrite("masked_img.jpg", masked_img)
         
         if not labellist:
-            print("[LOGIC] CAM1: No objects detected")
-            return False
+            print("[LOGIC] CAM1: No objects detected - region is clear")
+            cv2.imwrite("test.jpg", vis_img)
+            return True
         
-        # Count COAL (label 6) pixels in the region
-        coal_count = 0
-        non_coal_count = 0
+        # Allowed object types in the region
+        allowed_classes = {"COAL", "TRUCK_BODY"}
+        
+        # Check each detection for overlap with region
+        has_coal_or_truck = False
+        has_forbidden_objects = False
+        forbidden_objects_in_region = []
         
         for detection in labellist:
             if len(detection) < 6:
@@ -215,37 +234,53 @@ def _validate_cam1_region(image_path: str) -> bool:
             overlap_x_max = min(x_max, x_end)
             overlap_y_min = max(y_min, y_start)
             overlap_y_max = min(y_max, y_end)
-            if class_name == "COAL": cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
             
-            if overlap_x_min < overlap_x_max and overlap_y_min < overlap_y_max:
+            has_overlap = (overlap_x_min < overlap_x_max) and (overlap_y_min < overlap_y_max)
+            
+            if has_overlap:
                 overlap_area = (overlap_x_max - overlap_x_min) * (overlap_y_max - overlap_y_min)
                 
-                if class_name == "COAL":
-                    coal_count += overlap_area
-                    print(f"[LOGIC] CAM1: COAL detected in region - overlap area: {overlap_area}px (confidence: {score:.2f})")
+                if class_name in allowed_classes:
+                    # Draw in green for allowed objects
+                    cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+                    has_coal_or_truck = True
+                    print(f"[LOGIC] CAM1: ALLOWED '{class_name}' overlaps region - area: {overlap_area}px (confidence: {score:.2f})")
                 else:
-                    non_coal_count += overlap_area
-                    print(f"[LOGIC] CAM1: {class_name} detected in region - overlap area: {overlap_area}px (confidence: {score:.2f})")
+                    # Draw in red for forbidden objects
+                    cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
+                    has_forbidden_objects = True
+                    forbidden_objects_in_region.append((class_name, score, overlap_area))
+                    print(f"[LOGIC] CAM1: FORBIDDEN '{class_name}' overlaps region - area: {overlap_area}px (confidence: {score:.2f})")
+            else:
+                # Object detected but doesn't overlap region - draw in cyan
+                cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 255, 0), 1)
+                print(f"[LOGIC] CAM1: '{class_name}' detected but outside region (confidence: {score:.2f})")
         
         cv2.imwrite("test.jpg", vis_img)
-        total_masked = coal_count + non_coal_count
-        if total_masked == 0:
-            print("[LOGIC] CAM1: No mask detections in region")
+        
+        # Result: Pass only if NO forbidden objects overlap the region
+        if has_forbidden_objects:
+            print(f"[LOGIC] CAM1: VALIDATION FAILED - Forbidden objects in region: {forbidden_objects_in_region}")
             return False
-        
-        coal_percentage = (coal_count / total_masked) * 100
-        print(f"[LOGIC] CAM1: Region analysis - COAL: {coal_count}px ({coal_percentage:.1f}%), Others: {non_coal_count}px")
-        
-        # Success if >=80% of detected pixels in region are COAL
-        threshold = 0.80
-        result = (coal_count / total_masked) >= threshold
-        return result
+        else:
+            print(f"[LOGIC] CAM1: VALIDATION PASSED - Region contains only allowed objects or is clear")
+            return True
     
     except Exception as e:
         print(f"[LOGIC] Error in CAM1 validation: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
+    """
+    Validate AUGER positioning using CAM2.
+    
+    Primary: Look for AUGER_BOTTOM (label 23) detection - use its lowest mask point
+    Fallback: If AUGER_BOTTOM not detected, use AUGER (label 22) frame - use center of bottom edge
+    
+    Then verify the reference point is inside the target COAL_AREA box.
+    """ 
     try:
         image = cv2.imread(image_path)
         if image is None:
@@ -275,8 +310,9 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
         }
         target_coal_label = target_coal_labels.get(target_area_num, "COAL_AREA_1")
         
-        # Find AUGER_BOTTOM and COAL_AREA detections
+        # Find AUGER_BOTTOM, AUGER, and COAL_AREA detections
         auger_bottom_detection = None
+        auger_detection = None
         coal_area_bbox = None
         
         for detection in labellist:
@@ -291,67 +327,94 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
             x_max = int(detection[4])
             
             if class_name == "AUGER_BOTTOM":
-                cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
-                cv2.imwrite("test.jpg", vis_img)
                 auger_bottom_detection = detection
-                print(f"[LOGIC] CAM2: AUGER_BOTTOM detected (bounding box: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
+                print(f"[LOGIC] CAM2: AUGER_BOTTOM detected (bbox: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
+            
+            elif class_name == "AUGER":
+                auger_detection = detection
+                print(f"[LOGIC] CAM2: AUGER detected (bbox: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
             
             elif class_name == target_coal_label:
-                cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-                cv2.imwrite("test.jpg", vis_img)
                 coal_area_bbox = {
                     'x_min': x_min, 'x_max': x_max,
                     'y_min': y_min, 'y_max': y_max,
                     'score': score
                 }
+                cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
                 print(f"[LOGIC] CAM2: Target {target_coal_label} at x=[{x_min}-{x_max}], y=[{y_min}-{y_max}] (confidence: {score:.2f})")
         
-        # Validate that both detections exist
-        if auger_bottom_detection is None:
-            print("[LOGIC] CAM2: AUGER_BOTTOM not detected")
-            return False
-        
+        # Validate that target coal area is detected
         if coal_area_bbox is None:
             print(f"[LOGIC] CAM2: Target coal area {target_coal_label} not detected")
             return False
         
-        # Extract mask points from AUGER_BOTTOM detection (last element is the mask points array)
-        mask_points = auger_bottom_detection[-1]
+        # ─── Determine Reference Point ─────────────────────────────────────────
+        reference_point = None
+        reference_source = None
         
-        if mask_points is None or len(mask_points) == 0:
-            print("[LOGIC] CAM2: AUGER_BOTTOM has no mask points")
-            return False
+        # Primary: Try to use AUGER_BOTTOM's lowest mask point
+        if auger_bottom_detection is not None:
+            mask_points = auger_bottom_detection[-1]
+            
+            if mask_points is not None and len(mask_points) > 0:
+                # Find the very bottom point (maximum y value) from mask points
+                bottom_point = max(mask_points, key=lambda p: p[1])
+                reference_point = (int(bottom_point[0]), int(bottom_point[1]))
+                reference_source = "AUGER_BOTTOM mask"
+                
+                print(f"[LOGIC] CAM2: Using AUGER_BOTTOM lowest mask point as reference: {reference_point}")
+                cv2.circle(vis_img, reference_point, 8, (0, 0, 255), -1)
+            else:
+                print("[LOGIC] CAM2: AUGER_BOTTOM detected but has no mask points - falling back to AUGER")
+                auger_bottom_detection = None
         
-        # Find the very bottom point (maximum y value) from mask points
-        bottom_point = max(mask_points, key=lambda p: p[1])
-        bottom_x = int(bottom_point[0])
-        bottom_y = int(bottom_point[1])
-        cv2.circle(vis_img, (bottom_x, bottom_y), 6, (0, 0, 255), -1)
+        # Fallback: If AUGER_BOTTOM unavailable, use center of AUGER bottom edge
+        if reference_point is None:
+            if auger_detection is None:
+                print("[LOGIC] CAM2: Neither AUGER_BOTTOM nor AUGER detected")
+                return False
+            
+            # Extract AUGER bounding box
+            y_min = int(auger_detection[1])
+            y_max = int(auger_detection[2])
+            x_min = int(auger_detection[3])
+            x_max = int(auger_detection[4])
+            
+            # Center point of bottom edge
+            center_x = (x_min + x_max) // 2
+            bottom_y = y_max
+            reference_point = (center_x, bottom_y)
+            reference_source = "AUGER bottom edge center"
+            
+            print(f"[LOGIC] CAM2: AUGER_BOTTOM not available - Using {reference_source} as reference: {reference_point}")
+            cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
+            cv2.circle(vis_img, reference_point, 8, (255, 165, 0), -1)
+        
         cv2.imwrite("test.jpg", vis_img)
         
-        print(f"[LOGIC] CAM2: AUGER_BOTTOM mask has {len(mask_points)} points")
-        print(f"[LOGIC] CAM2: AUGER_BOTTOM lowest mask point at ({bottom_x}, {bottom_y})")
-        
-        # Get COAL_AREA bounds
+        # ─── Validate Reference Point Inside Coal Area ───────────────────────
         coal_x_min = coal_area_bbox['x_min']
         coal_x_max = coal_area_bbox['x_max']
         coal_y_min = coal_area_bbox['y_min']
         coal_y_max = coal_area_bbox['y_max']
         
-        print(f"[LOGIC] CAM2: COAL_AREA box x=[{coal_x_min}-{coal_x_max}], y=[{coal_y_min}-{coal_y_max}]")
+        ref_x = reference_point[0]
+        ref_y = reference_point[1]
         
-        # Check if AUGER_BOTTOM's bottom mask point is inside COAL_AREA bounds
-        inside_x = coal_x_min <= bottom_x <= coal_x_max
-        inside_y = coal_y_min <= bottom_y <= coal_y_max
+        inside_x = coal_x_min <= ref_x <= coal_x_max
+        inside_y = coal_y_min <= ref_y <= coal_y_max
         
         result = inside_x and inside_y
         
+        print(f"[LOGIC] CAM2: Reference point ({ref_x}, {ref_y}) from {reference_source}")
+        print(f"[LOGIC] CAM2: COAL_AREA bounds x=[{coal_x_min}-{coal_x_max}], y=[{coal_y_min}-{coal_y_max}]")
+        print(f"[LOGIC] CAM2: X alignment: {inside_x} (ref_x={ref_x} in range [{coal_x_min}-{coal_x_max}])")
+        print(f"[LOGIC] CAM2: Y alignment: {inside_y} (ref_y={ref_y} in range [{coal_y_min}-{coal_y_max}])")
+        
         if result:
-            print(f"[LOGIC] CAM2: AUGER_BOTTOM lowest mask point is inside {target_coal_label}")
+            print(f"[LOGIC] CAM2: AUGER is positioned correctly inside {target_coal_label}")
         else:
-            print(f"[LOGIC] CAM2: AUGER_BOTTOM lowest mask point is NOT inside {target_coal_label}")
-            print(f"[LOGIC] X alignment: {inside_x} (point_x={bottom_x} in range [{coal_x_min}-{coal_x_max}])")
-            print(f"[LOGIC] Y alignment: {inside_y} (point_y={bottom_y} in range [{coal_y_min}-{coal_y_max}])")
+            print(f"[LOGIC] CAM2: AUGER is NOT positioned correctly inside {target_coal_label}")
         
         return result
     

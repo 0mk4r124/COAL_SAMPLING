@@ -411,7 +411,21 @@ class SamplerController:
                     action = data.get("action", "")
                     self.mqtt.data = {**data, "_consumed": True}
 
-                    if action == "auto_manual":
+
+                    if action == "move_y_right":
+                        duration = data.get("duration", 0)
+                        self.move_y_right(duration)
+                    elif action == "move_y_left":
+                        duration = data.get("duration", 0)
+                        self.move_y_left(duration)
+                    elif action == "move_x_forward":
+                        duration = data.get("duration", 0)
+                        self.move_x_forward(duration)
+                    elif action == "move_x_reverse":
+                        duration = data.get("duration", 0)
+                        self.move_x_reverse(duration)
+
+                    elif action == "auto_manual":
                         if self.check_auto_manual():
                             self.mqtt.publish(TOPIC_OUT, {"status": "auto_manual_on"})
                         else:

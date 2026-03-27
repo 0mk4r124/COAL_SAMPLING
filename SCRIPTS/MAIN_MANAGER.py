@@ -33,6 +33,7 @@ POSITION_CONFIRMATION_TIMEOUT = 30
 
 TEMP_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
 RESULT_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RESULT/"
+INF_IMG = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/INF/"
 
 def get_sample_positions(used_areas=None):
     if used_areas is None:
@@ -338,6 +339,10 @@ class Manager:
         # Sampling position index tracker
         self._current_sample_index = 0
         self._successful_cycles = 0
+        
+        # Auger position confirmation tracking
+        self._confirmation_loop_count = 0
+        self._confirmation_results = []
 
     def _pop(self, topic: str) -> dict | None:
         return self.mqtt.pop(topic)
@@ -364,6 +369,161 @@ class Manager:
             if row:
                 return rfid, row
         return None, None
+
+    def _capture_images_for_confirmation(self, loop_num: int, movement_type: str = "") -> tuple[str, str] | None:
+        try:
+            # Create INF directory structure
+            inf_dir = os.path.join(INF_IMG, self.date_file, self.uid)
+            os.makedirs(inf_dir, exist_ok=True)
+            
+            # Generate filenames
+            suffix = f"_loop{loop_num}_{movement_type}" if movement_type else f"_loop{loop_num}"
+            cam1_filename = f"CAM1{suffix}.jpg"
+            cam3_filename = f"CAM3{suffix}.jpg"
+            
+            cam1_path = os.path.join(inf_dir, cam1_filename)
+            cam3_path = os.path.join(inf_dir, cam3_filename)
+            
+            print(f"[MANAGER] Capturing images for confirmation (Loop {loop_num}, Movement: {movement_type})")
+            
+            # Publish capture commands
+            self._cam(action="capture_raw", camera="cam1", path=cam1_path)
+            time.sleep(0.5)
+            self._cam(action="capture_raw", camera="cam3", path=cam3_path)
+            
+            # Wait for captures to complete
+            time.sleep(2)
+            
+            # Verify files exist
+            if os.path.exists(cam1_path) and os.path.exists(cam3_path):
+                print(f"[MANAGER] Images captured successfully: CAM1={cam1_path}, CAM3={cam3_path}")
+                return (cam1_path, cam3_path)
+            else:
+                print(f"[MANAGER] Image capture failed - files not created")
+                return None
+        
+        except Exception as e:
+            print(f"[MANAGER] Error capturing images: {e}")
+            return None
+
+    def _confirm_auger_position_with_movement_loop(self, target_area: int) -> bool:
+        MOVEMENT_DURATION = 2  # seconds
+        confirmations = []
+        
+        try:
+            print(f"[MANAGER] Starting 5-loop auger position confirmation (Target Area: {target_area})")
+            
+            # ─── Loop 1: Original Position ─────────────────────────────────────────
+            print("\n[MANAGER] ═══ Loop 1/5: Original Position ═══")
+            images = self._capture_images_for_confirmation(1, "original")
+            if images:
+                result = confirm_auger_position(images[0], images[1], target_area)
+                confirmations.append(result)
+                print(f"[MANAGER] Loop 1 Result: {'PASS' if result else 'FAIL'}")
+            else:
+                print("[MANAGER] Loop 1: Image capture failed")
+                confirmations.append(False)
+            
+            # ─── Loop 2: Move Right ────────────────────────────────────────────────
+            print("\n[MANAGER] ═══ Loop 2/5: Move Right ═══")
+            print(f"[MANAGER] Moving Y-axis right for {MOVEMENT_DURATION}s…")
+            self._sampler(action="move_y_right", duration=MOVEMENT_DURATION)
+            time.sleep(MOVEMENT_DURATION + 2)  # Wait for movement to complete
+            
+            images = self._capture_images_for_confirmation(2, "right")
+            if images:
+                result = confirm_auger_position(images[0], images[1], target_area)
+                confirmations.append(result)
+                print(f"[MANAGER] Loop 2 Result: {'PASS' if result else 'FAIL'}")
+            else:
+                confirmations.append(False)
+            
+            print(f"[MANAGER] Moving Y-axis left for {MOVEMENT_DURATION}s (returning to original)…")
+            self._sampler(action="move_y_left", duration=MOVEMENT_DURATION)
+            time.sleep(MOVEMENT_DURATION + 2)
+            
+            # ─── Loop 3: Move Left ─────────────────────────────────────────────────
+            print("\n[MANAGER] ═══ Loop 3/5: Move Left ═══")
+            print(f"[MANAGER] Moving Y-axis left for {MOVEMENT_DURATION}s…")
+            self._sampler(action="move_y_left", duration=MOVEMENT_DURATION)
+            time.sleep(MOVEMENT_DURATION + 2)
+            
+            images = self._capture_images_for_confirmation(3, "left")
+            if images:
+                result = confirm_auger_position(images[0], images[1], target_area)
+                confirmations.append(result)
+                print(f"[MANAGER] Loop 3 Result: {'PASS' if result else 'FAIL'}")
+            else:
+                confirmations.append(False)
+            
+            print(f"[MANAGER] Moving Y-axis right for {MOVEMENT_DURATION}s (returning to original)…")
+            self._sampler(action="move_y_right", duration=MOVEMENT_DURATION)
+            time.sleep(MOVEMENT_DURATION + 2)
+            
+            # ─── Loop 4: Move Forward ──────────────────────────────────────────────
+            print("\n[MANAGER] ═══ Loop 4/5: Move Forward ═══")
+            print(f"[MANAGER] Moving X-axis forward for {MOVEMENT_DURATION}s…")
+            self._sampler(action="move_x_forward", duration=MOVEMENT_DURATION)
+            time.sleep(MOVEMENT_DURATION + 2)
+            
+            images = self._capture_images_for_confirmation(4, "forward")
+            if images:
+                result = confirm_auger_position(images[0], images[1], target_area)
+                confirmations.append(result)
+                print(f"[MANAGER] Loop 4 Result: {'PASS' if result else 'FAIL'}")
+            else:
+                confirmations.append(False)
+            
+            print(f"[MANAGER] Moving X-axis reverse for {MOVEMENT_DURATION}s (returning to original)…")
+            self._sampler(action="move_x_reverse", duration=MOVEMENT_DURATION)
+            time.sleep(MOVEMENT_DURATION + 1)
+            
+            # ─── Loop 5: Move Reverse ──────────────────────────────────────────────
+            print("\n[MANAGER] ═══ Loop 5/5: Move Reverse ═══")
+            print(f"[MANAGER] Moving X-axis reverse for {MOVEMENT_DURATION}s…")
+            self._sampler(action="move_x_reverse", duration=MOVEMENT_DURATION)
+            time.sleep(MOVEMENT_DURATION + 1)
+            
+            images = self._capture_images_for_confirmation(5, "reverse")
+            if images:
+                result = confirm_auger_position(images[0], images[1], target_area)
+                confirmations.append(result)
+                print(f"[MANAGER] Loop 5 Result: {'PASS' if result else 'FAIL'}")
+            else:
+                confirmations.append(False)
+            
+            print(f"[MANAGER] Moving X-axis forward for {MOVEMENT_DURATION}s (returning to original)…")
+            self._sampler(action="move_x_forward", duration=MOVEMENT_DURATION)
+            time.sleep(MOVEMENT_DURATION + 1)
+            
+            # ─── Summary ────────────────────────────────────────────────────────────
+            self._confirmation_results = confirmations
+            passed = sum(confirmations)
+            total = len(confirmations)
+            
+            print(f"\n[MANAGER] ╔════ AUGER POSITION CONFIRMATION SUMMARY ════╗")
+            print(f"[MANAGER] ║ Loop 1 (Original): {'PASS' if confirmations[0] else 'FAIL':<28} ║")
+            print(f"[MANAGER] ║ Loop 2 (Right):    {'PASS' if confirmations[1] else 'FAIL':<28} ║")
+            print(f"[MANAGER] ║ Loop 3 (Left):     {'PASS' if confirmations[2] else 'FAIL':<28} ║")
+            print(f"[MANAGER] ║ Loop 4 (Forward):  {'PASS' if confirmations[3] else 'FAIL':<28} ║")
+            print(f"[MANAGER] ║ Loop 5 (Reverse):  {'PASS' if confirmations[4] else 'FAIL':<28} ║")
+            print(f"[MANAGER] ║ Total: {passed}/{total} confirmations passed                ║")
+            print(f"[MANAGER] ╚═════════════════════════════════════════════╝")
+            
+            # Return True only if ALL 5 loops pass
+            final_result = all(confirmations)
+            if final_result:
+                print(f"[MANAGER] AUGER POSITIONING CONFIRMED - All 5 loops passed!")
+            else:
+                print(f"[MANAGER] AUGER POSITIONING FAILED - Some loops did not pass")
+            
+            return final_result
+        
+        except Exception as e:
+            print(f"[MANAGER] Error in auger position confirmation loop: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     # ── State handlers ────────────────────────────────────────────────────────
 
@@ -503,10 +663,10 @@ class Manager:
         
         if msg and msg.get("status") == "red_sent":
             print("[MANAGER] Red signal confirmed.")
-            self._goto(State.CLOSE_BARRIERCYCLE_DONE)
+            self._goto(State.CLOSE_BARRIER)
             return
         
-        if self._elapsed() > 10:
+        if self._elapsed() > 30:
             print("[MANAGER] Red signal timeout — proceeding to close barrier")
             self._goto(State.CLOSE_BARRIER)
 
@@ -566,8 +726,8 @@ class Manager:
         
         if msg and msg.get("status") == "position_set":
             print("[MANAGER] Auger positioned — waiting for AI confirmation …")
-            # TODO: Get image and run AI confirmation
-            # For now, proceed with sampling
+            try: self._confirm_auger_position_with_movement_loop(self.positions[self._current_sample_index]["area"])
+            except: pass
             self._goto(State.CYCLE_CAPTURE)
             return
         
