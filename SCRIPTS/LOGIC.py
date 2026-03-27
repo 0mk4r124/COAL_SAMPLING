@@ -5,11 +5,11 @@ from datetime import datetime
 from DEPENDANT.INFERENCE import MASKRCNN
 
 # AI Model Initialization 
-BASE_DIR = '/home/omkar/INSIGHTZZ/PROJECTS/STANDARD_TEMPLATE/DJANGO_SCRIPTS_FRAMEWORK/STANDARD_FRAMEWORK/'
+BASE_DIR = '/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/'
 MODEL_CONFIG_PATH = BASE_DIR + 'SCRIPTS/configs/COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml'
-MODEL_PATH = BASE_DIR + 'SCRIPTS/MODEL/'
+MODEL_PATH = BASE_DIR + 'MODEL/COAL_SAMPLING_23MAR/'
 MODEL_FILE = 'model_final.pth'
-CLASS_JSON = 'SCRIPTS/MODEL/JSON.json'
+CLASS_JSON = 'MODEL/COAL_SAMPLING_23MAR/COAL_SAMPLING_23MAR.json'
 
 _inference_model = None
 
@@ -167,6 +167,7 @@ def _validate_cam1_region(image_path: str) -> bool:
             print(f"[LOGIC] Failed to read CAM1 image: {image_path}")
             return False
         
+        vis_img = image.copy()
         height, width = image.shape[:2]
         print(f"[LOGIC] CAM1 Image dimensions: {width}x{height}")
         
@@ -182,9 +183,12 @@ def _validate_cam1_region(image_path: str) -> bool:
         
         print(f"[LOGIC] Bottom-middle region: x=[{x_start}-{x_end}], y=[{y_start}-{y_end}]")
         print(f"[LOGIC] Region dimensions: {region_width}x{region_height} ({region_area} pixels)")
+        cv2.rectangle(vis_img, (x_start, y_start), (x_end, y_end), (0, 255, 255), 2)
+        cv2.imwrite("test.jpg", vis_img)
         
         # Run inference on full image
         masked_img, labellist = _inference_model.run_inference(image)
+        cv2.imwrite("masked_img.jpg", masked_img)
         
         if not labellist:
             print("[LOGIC] CAM1: No objects detected")
@@ -211,6 +215,7 @@ def _validate_cam1_region(image_path: str) -> bool:
             overlap_x_max = min(x_max, x_end)
             overlap_y_min = max(y_min, y_start)
             overlap_y_max = min(y_max, y_end)
+            if class_name == "COAL": cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
             
             if overlap_x_min < overlap_x_max and overlap_y_min < overlap_y_max:
                 overlap_area = (overlap_x_max - overlap_x_min) * (overlap_y_max - overlap_y_min)
@@ -222,6 +227,7 @@ def _validate_cam1_region(image_path: str) -> bool:
                     non_coal_count += overlap_area
                     print(f"[LOGIC] CAM1: {class_name} detected in region - overlap area: {overlap_area}px (confidence: {score:.2f})")
         
+        cv2.imwrite("test.jpg", vis_img)
         total_masked = coal_count + non_coal_count
         if total_masked == 0:
             print("[LOGIC] CAM1: No mask detections in region")
@@ -246,11 +252,13 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
             print(f"[LOGIC] Failed to read CAM2 image: {image_path}")
             return False
         
+        vis_img = image.copy()
         height, width = image.shape[:2]
         print(f"[LOGIC] CAM2 Image dimensions: {width}x{height}")
         
         # Run inference
         masked_img, labellist = _inference_model.run_inference(image)
+        cv2.imwrite("masked_img.jpg", masked_img)
         
         if not labellist:
             print("[LOGIC] CAM2: No objects detected")
@@ -283,10 +291,14 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
             x_max = int(detection[4])
             
             if class_name == "AUGER_BOTTOM":
+                cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
+                cv2.imwrite("test.jpg", vis_img)
                 auger_bottom_detection = detection
                 print(f"[LOGIC] CAM2: AUGER_BOTTOM detected (bounding box: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
             
             elif class_name == target_coal_label:
+                cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+                cv2.imwrite("test.jpg", vis_img)
                 coal_area_bbox = {
                     'x_min': x_min, 'x_max': x_max,
                     'y_min': y_min, 'y_max': y_max,
@@ -314,6 +326,8 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
         bottom_point = max(mask_points, key=lambda p: p[1])
         bottom_x = int(bottom_point[0])
         bottom_y = int(bottom_point[1])
+        cv2.circle(vis_img, (bottom_x, bottom_y), 6, (0, 0, 255), -1)
+        cv2.imwrite("test.jpg", vis_img)
         
         print(f"[LOGIC] CAM2: AUGER_BOTTOM mask has {len(mask_points)} points")
         print(f"[LOGIC] CAM2: AUGER_BOTTOM lowest mask point at ({bottom_x}, {bottom_y})")
