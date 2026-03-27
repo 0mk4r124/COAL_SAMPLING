@@ -96,6 +96,7 @@ class State(Enum):
     CYCLE_CONFIRM            = auto()
     CYCLE_CAPTURE            = auto()
     CYCLE_DONE               = auto()
+    CYCLE_EMERGENCY_WAIT     = auto()
     RED_SIGNAL               = auto()
     COMPLETE_FINAL           = auto()
     GREEN_SIGNAL             = auto()
@@ -243,6 +244,44 @@ def db_complete_log(uid: str) -> bool:
     finally:
         if db: db.close()
 
+def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual: str = None) -> bool:
+    """Update or create PLC_COMM record to track state and status"""
+    db = None
+    try:
+        db = _db_connect()
+        cur = db.cursor()
+        now = datetime.now()
+        
+        # Try to update first
+        cur.execute(
+            """
+            UPDATE PLC_COMM
+               SET STATE = %s, EMERGENCY = %s, AUTO_MANUAL = %s, UPDATED = %s
+             WHERE UID = %s
+            """,
+            (state, emergency, auto_manual, now, uid)
+        )
+        
+        # If no rows were updated, insert new record
+        if cur.rowcount == 0:
+            cur.execute(
+                """
+                INSERT INTO PLC_COMM
+                    (UID, STATE, EMERGENCY, AUTO_MANUAL, UPDATED)
+                VALUES
+                    (%s, %s, %s, %s, %s)
+                """,
+                (uid, state, emergency, auto_manual, now)
+            )
+        
+        db.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] db_update_plc_comm error: {e}")
+        return False
+    finally:
+        if db: db.close()
+
 # ══════════════════════════════════════════════════════════════════════════════
 class Manager:
 
@@ -262,6 +301,7 @@ class Manager:
         State.CYCLE_CONFIRM        : "_handle_cycle_confirm",
         State.CYCLE_CAPTURE        : "_handle_cycle_capture",
         State.CYCLE_DONE           : "_handle_cycle_done",
+        State.CYCLE_EMERGENCY_WAIT : "_handle_cycle_emergency_wait",
         State.COMPLETE_FINAL       : "_handle_complete_final",
         State.GREEN_SIGNAL         : "_handle_green_signal",
         State.COMPLETE             : "_handle_complete",
@@ -286,6 +326,7 @@ class Manager:
         self.positions : list        = []
         self.cycle     : int         = 0
         self.date_file : str         = ""
+        self._emergency_return_state: State | None = State.CYCLE_CONFIRM  # Track which state to resume to after emergency
 
         self._state_entered_at: float = 0.0
         self._db_last_polled  : float = 0.0
@@ -309,6 +350,10 @@ class Manager:
         print(f"[MANAGER] State: {self.state.name}  {new_state.name}")
         self.state             = new_state
         self._state_entered_at = time.time()
+        
+        # Update database with new state
+        if self.uid:
+            db_update_plc_comm(self.uid, new_state.name)
 
     def _elapsed(self) -> float:
         return time.time() - self._state_entered_at
@@ -441,8 +486,10 @@ class Manager:
             auto_manual_status = msg.get("status", True)
             if auto_manual_status == "auto_manual_off":
                 print("[MANAGER] Manual mode — waiting for user confirmation …")
+                # Update database to trigger popup
+                db_update_plc_comm(self.uid, self.state.name, auto_manual="manual")
                 self._barrier(action="check_truck")
-                # Web app will handle this
+                # Web app will handle this - popup will appear
                 return
             
             # Set red signal
@@ -456,7 +503,7 @@ class Manager:
         
         if msg and msg.get("status") == "red_sent":
             print("[MANAGER] Red signal confirmed.")
-            self._goto(State.CLOSE_BARRIER)
+            self._goto(State.CLOSE_BARRIERCYCLE_DONE)
             return
         
         if self._elapsed() > 10:
@@ -530,8 +577,23 @@ class Manager:
 
     def _handle_cycle_capture(self):
         """Start sampling cycle"""
-        self.cycle = cycle_num
+        # Check for emergency stop before starting cycle
+        msg = self._pop("plc_sampler/status")
+        if msg and msg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop detected before cycle start.")
+            self._emergency_return_state = State.CYCLE_CAPTURE
+            # Update database to trigger emergency popup
+            db_update_plc_comm(self.uid, self.state.name, emergency="active")
+            self.mqtt.publish("fe/notification", {
+                "type": "emergency_stop",
+                "message": "Emergency stop triggered on Sampler PLC. Waiting for clearance...",
+                "state": "emergency_triggered"
+            })
+            self._goto(State.CYCLE_EMERGENCY_WAIT)
+            return
+        
         cycle_num = self._successful_cycles + 1
+        self.cycle = cycle_num
 
         print(f"[MANAGER] Starting sampling cycle {cycle_num} …")
         self._sampler(action="start_cycle", cycle=cycle_num)
@@ -547,6 +609,20 @@ class Manager:
             return
         
         status = msg.get("status", "")
+        
+        # Check for emergency stop during cycle
+        if status == "emergency_stop":
+            print("[MANAGER] Emergency stop detected during cycle execution.")
+            self._emergency_return_state = State.CYCLE_DONE
+            # Update database to trigger emergency popup
+            db_update_plc_comm(self.uid, self.state.name, emergency="active")
+            self.mqtt.publish("fe/notification", {
+                "type": "emergency_stop",
+                "message": "Emergency stop triggered on Sampler PLC during cycle. Waiting for clearance...",
+                "state": "emergency_triggered"
+            })
+            self._goto(State.CYCLE_EMERGENCY_WAIT)
+            return
         
         if status == "sample_cycle_complete":
             print(f"[MANAGER] Cycle {self.cycle} completed")
@@ -578,6 +654,36 @@ class Manager:
             print("[MANAGER] Cycle inrpogress — waiting …")
             self._sampler(action="check_sample_cycle_complete")
 
+    def _handle_cycle_emergency_wait(self):
+        print("[MANAGER] Waiting for emergency stop clearance on Sampler PLC …")
+        
+        msg = self._pop("plc_sampler/status")
+        if not msg:
+            # Keep requesting emergency status check
+            self._sampler(action="check_emergency_status")
+            return
+        
+        status = msg.get("status", "")
+        
+        # Emergency stop cleared - resume to CYCLE_CONFIRM and reset cycles
+        if status == "emergency_cleared":
+            print("[MANAGER] Emergency stop cleared. Resuming operation …")
+            self.mqtt.publish("fe/notification", {
+                "type": "emergency_cleared",
+                "message": "Emergency stop cleared. Resuming sampling process...",
+                "state": "emergency_cleared"
+            })
+            
+            # Reset successful cycles and return to CYCLE_CONFIRM
+            self._successful_cycles = 0
+            self._current_sample_index = 0
+            self.positions = []
+            self._emergency_return_state = None
+            self._goto(State.CYCLE_CONFIRM)
+        else:
+            # Still waiting for emergency clearance
+            self._sampler(action="check_emergency_status")
+
     def _handle_complete_final(self):
         """Complete sampling — generate QR code and save logs"""
         msg = self._pop("plc_sampler/status")
@@ -588,6 +694,7 @@ class Manager:
             vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
             vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
             qr_path = generate_qr_code(vendor_name, vehicle_number, self.uid, self.paths["QR_CODE_PATH"])
+            print(f"[MANAGER] QR code generated at {qr_path}")
             
             # Set green signal
             self._barrier(action="green_signal")
@@ -621,14 +728,14 @@ class Manager:
         self._reset("")
         self._cam(action="reset")
 
-    def _handle_error(self, error_message: str = ""):
+    def _handle_error(self):
         """Error state — reset system"""
         print("[MANAGER] Error state — resetting system.")
         self._cam(action="sample_capture_stop")
         self._cam(action="reset")
         self._barrier(action="close_barrier")
         self._sampler(action="reset")
-        self._reset(error_message)
+        self._reset("Handled error state !!")
 
     def _reset(self, msg: str = ""):
         """Reset state for next vehicle"""

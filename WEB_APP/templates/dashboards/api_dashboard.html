@@ -34,6 +34,22 @@
         <div class="card shadow-sm">
             <div class="card-body">
 
+                <!-- State Display and Reset Button -->
+                <div class="row g-2 mb-3 align-items-center">
+                    <div class="col-md-8">
+                        <div class="alert alert-info mb-0">
+                            <strong>Current State:</strong> <span id="currentState" class="badge bg-primary">IDLE</span>
+                            <br>
+                            <strong>Vehicle:</strong> <span id="dashVendorName">ABC Traders</span> | <span id="dashVehicleNumber">MH 12 AB 1234</span>
+                        </div>
+                    </div>
+                    <div class="col-md-4 text-end">
+                        <button class="btn btn-danger" onclick="resetSystemConfirm()">
+                            <i class="fas fa-exclamation-triangle"></i> Reset System
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Images Row -->
                 <div class="row g-2 mb-3">
                     <div class="col-4 text-center border border-3 rounded">
@@ -341,5 +357,141 @@
     </div>
 </div>
 
+
+<!-- Emergency Popup Modal -->
+<div class="modal fade" id="emergencyModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-5 border-danger">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-exclamation-circle"></i> EMERGENCY STOP TRIGGERED
+                </h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger">
+                    <strong>Emergency stop has been activated on the Sampler PLC!</strong>
+                </div>
+                <p class="fs-5">An emergency stop event was detected during the sampling cycle. The system is now waiting for the emergency to be cleared.</p>
+                <p class="fs-6 text-muted">Once the emergency is resolved and cleared by the technician, you will see an option to either:</p>
+                <ul class="fs-6">
+                    <li>Continue with sampling (retake all cycles)</li>
+                    <li>Skip remaining cycles and mark vehicle as completed</li>
+                </ul>
+                <div class="text-center mt-3">
+                    <div class="spinner-border text-danger" role="status">
+                        <span class="visually-hidden">Waiting...</span>
+                    </div>
+                    <p class="mt-2"><strong>Waiting for emergency clearance...</strong></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Emergency Cleared - Action Modal -->
+<div class="modal fade" id="emergencyClearedModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-5 border-success">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-check-circle"></i> EMERGENCY CLEARED
+                </h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-success">
+                    <strong>The emergency stop has been cleared!</strong>
+                </div>
+                <p class="fs-5">The system is ready to resume. What would you like to do?</p>
+            </div>
+            <div class="modal-footer gap-2">
+                <button type="button" class="btn btn-success btn-lg" onclick="handleEmergencyRetake()">
+                    <i class="fas fa-redo"></i> Retake Cycles
+                </button>
+                <button type="button" class="btn btn-warning btn-lg" onclick="handleEmergencySkip()">
+                    <i class="fas fa-fast-forward"></i> Skip Cycles & Mark Complete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Auto Manual Popup Modal -->
+<div class="modal fade" id="autoManualModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-5 border-warning">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-hand-paper"></i> MANUAL MODE DETECTED
+                </h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <strong>The system is in MANUAL MODE!</strong>
+                </div>
+                <p class="fs-5">The Sampler PLC has detected manual mode. Please choose what you would like to do:</p>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6 class="card-title">Automatic Cycles</h6>
+                                <p class="card-text">Continue with automatic sampling cycles (take 3 samples)</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-body">
+                                <h6 class="card-title">Skip All Cycles</h6>
+                                <p class="card-text">Skip all sampling cycles and mark the vehicle as completed without samples</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer gap-2">
+                <button type="button" class="btn btn-success btn-lg" onclick="handleAutoManualContinue()">
+                    <i class="fas fa-play"></i> Continue with Automatic Cycles
+                </button>
+                <button type="button" class="btn btn-danger btn-lg" onclick="handleAutoManualSkip()">
+                    <i class="fas fa-skip-forward"></i> Skip & Complete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Reset System Confirmation Modal -->
+<div class="modal fade" id="resetConfirmModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-5 border-danger">
+            <div class="modal-header bg-danger text-white">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-warning"></i> CONFIRM SYSTEM RESET
+                </h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger">
+                    <strong>WARNING: This will reset the entire system!</strong>
+                </div>
+                <p class="fs-5">You are about to reset the Coal Sampling system. This action will:</p>
+                <ul class="fs-6">
+                    <li>Mark the current vehicle processing as <strong>ERROR</strong></li>
+                    <li>Reset all state machines to <strong>IDLE</strong></li>
+                    <li>Clear all emergency and auto-manual statuses</li>
+                    <li>Stop any ongoing sampling cycles</li>
+                </ul>
+                <p class="fs-6 text-danger fw-bold mt-3">This action cannot be undone. Are you sure?</p>
+            </div>
+            <div class="modal-footer gap-2">
+                <button type="button" class="btn btn-secondary btn-lg" data-bs-dismiss="modal">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button type="button" class="btn btn-danger btn-lg" onclick="confirmResetSystem()">
+                    <i class="fas fa-check-circle"></i> Yes, Reset System
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 {% endblock %}

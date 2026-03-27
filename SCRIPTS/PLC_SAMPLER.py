@@ -19,6 +19,7 @@ Z_DOWN_SENSOR_FB = 10
 HEARTBIT = 12
 AUTO_MANUAL = 14
 CYCLE_COMPLETE = 16
+EMERGENCY_STOP = 18
 
 # OUTPUT OFFSETS
 CYCLE_START = 0
@@ -40,6 +41,7 @@ class SamplerController:
         self.plc = PLCCOMMINCATION(PLC_IP, DB_READ, DB_WRITE, "REED")
         self.mqtt = MQTT("PLC_SAMPLER")
         self.client = self.plc.createConnection()
+        self._emergency_state_last = 1  # Track last emergency state (1=normal, 0=emergency)
 
     def check_auto_manual(self):
         auto_manual = 0
@@ -63,6 +65,33 @@ class SamplerController:
 
         return sample_cycle_complete
     
+    def check_emergency_status(self):
+        """
+        Check emergency stop status and detect state transitions.
+        Returns True if emergency is active (EMERGENCY_STOP = 0).
+        Publishes emergency_cleared when transitioning from 0 to 1.
+        """
+        try:
+            emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+            
+            # Detect transition from emergency (0) to cleared (1)
+            if self._emergency_state_last == 0 and emergency == 1:
+                print("[PLC_SAMPLER] Emergency stop has been cleared!")
+                self.mqtt.publish(TOPIC_OUT, {"status": "emergency_cleared"})
+            
+            # Detect transition from normal (1) to emergency (0)
+            elif self._emergency_state_last == 1 and emergency == 0:
+                print("[PLC_SAMPLER] Emergency stop activated!")
+                self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop"})
+            
+            self._emergency_state_last = emergency
+            return emergency == 0  # Return True if emergency is active
+        
+        except Exception as e:
+            print(f"[PLC_SAMPLER] Emergency status read error: {e}")
+            return False
+    
+
     def sensors_ready(self):
 
         try:
@@ -80,33 +109,16 @@ class SamplerController:
 
         return False
 
-    def set_position(self, x: int, y: int):
-        try:
-            print(f"[PLC_SAMPLER] Setting position X={x}, Y={y}")
-            
-            # Set X axis
-            if x == 1:  # Forward/Home
-                self.move_x_forward(30)
-            else:  # Reverse
-                self.move_x_reverse(30)
-            
-            # Set Y axis
-            if y == 1:  # Right/Home
-                self.move_y_right(30)
-            else:  # Left
-                self.move_y_left(30)
-            
-            self.mqtt.publish(TOPIC_OUT, {"status": "position_set"})
-            print("[PLC_SAMPLER] Position set complete.")
-        except Exception as e:
-            msg = f"Set position error: {e}"
-            print(f"[PLC_SAMPLER] {msg}")
-            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
-
     def move_home(self):
 
         try:
             while True:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.reset()
+                    return False
+                
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
 
@@ -121,6 +133,12 @@ class SamplerController:
                 time.sleep(0.5)
                 
             while True:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.reset()
+                    return False
+                
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
 
@@ -134,6 +152,12 @@ class SamplerController:
                 time.sleep(0.5)
 
             while True:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.reset()
+                    return False
+                
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
@@ -158,6 +182,12 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving X Axis Reverse")
             start_time = time.time()
             while (time.time() - start_time) < duration:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.reset()
+                    return False
+
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_reverse = self.plc.readIntFromPLC(self.client, X_REVERSE_SENSOR_FB)
                 if x_reverse == 0: self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 1)
@@ -183,6 +213,12 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving X Axis Forward")
             start_time = time.time()
             while (time.time() - start_time) < duration:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.reset()
+                    return False
+
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
                 if x_forward == 0: self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
@@ -208,6 +244,12 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving Y Axis Left")
             start_time = time.time()
             while (time.time() - start_time) < duration:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.reset()
+                    return False
+                
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_left = self.plc.readIntFromPLC(self.client, Y_LEFT_SENSOR_FB)
                 if y_left == 0: self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 1)
@@ -233,6 +275,12 @@ class SamplerController:
             print("[PLC_SAMPLER] Moving Y Axis Right")
             start_time = time.time()
             while (time.time() - start_time) < duration:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.reset()
+                    return False
+                
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
                 if y_right == 0: self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
@@ -309,6 +357,12 @@ class SamplerController:
             duration = 120
             start_time = time.time()
             while True:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.reset()
+                    return False
+                
                 if (time.time() - start_time) > duration:
                     print("[PLC_SAMPLER] Sensors not ready")
                     msg = "Error"
@@ -339,10 +393,19 @@ class SamplerController:
         while True:
             try:
 
-                data = self.mqtt.data
-                # X_FORWORD_SENSOR_FB
-                # self.plc.writeIntToPLC(self.client, 0, 1)
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop", "msg": "Code stopped manually due to emergency !"})
+                    self.reset()
+                    now = time.time()
+                    while time.time() - now < 120:
+                        self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+                        time.sleep(1)
+                        self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+
+                data = self.mqtt.data
                 if data and data.get("_consumed") is not True:
 
                     action = data.get("action", "")
@@ -372,6 +435,8 @@ class SamplerController:
                     elif action == "check_sample_cycle_complete":
                         if self.check_sample_cycle_complete():
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
+                    elif action == "check_emergency_status":
+                        self.check_emergency_status()
                     elif action == "sample_cycle_stop":
                         self.stop_cycle()
                         self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_stop_comp"})
@@ -379,6 +444,17 @@ class SamplerController:
                     elif action == "reset":
                         self.reset()
 
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                    self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop", "msg": "Code stopped manually due to emergency !"})
+                    self.reset()
+                    now = time.time()
+                    while time.time() - now < 120:
+                        self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+                        time.sleep(1)
+                        self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
 

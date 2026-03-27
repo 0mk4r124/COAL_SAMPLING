@@ -276,3 +276,174 @@ def health_status(request):
     return JsonResponse({
         "data": results,
     })
+
+
+@csrf_exempt
+def get_current_status(request):
+    """Get current vehicle, state, and emergency/auto_manual status"""
+    try:
+        # Get the current in-progress vehicle
+        current_vehicle = VEHICLE_LOGS.objects.filter(status="IN_PROGRESS").first()
+        
+        if not current_vehicle:
+            return JsonResponse({
+                "status": "idle",
+                "uid": None,
+                "vehicle_number": "NOT_FOUND",
+                "vendor_name": "NOT_FOUND",
+                "current_state": "IDLE",
+                "emergency": None,
+                "auto_manual": None,
+                "emergency_acknowledged": False,
+                "auto_manual_acknowledged": False,
+            })
+        
+        # Get PLC communication record
+        plc_comm = PLC_COMM.objects.filter(uid=current_vehicle.uid).first()
+        
+        # Get vehicle details
+        rfids = (current_vehicle.rfids or "").split("|")
+        vehicle_number = "NOT_FOUND"
+        vendor_name = "NOT_FOUND"
+        
+        for rfid in rfids:
+            vehicle = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
+            if vehicle:
+                vendor = VENDOR_MASTER.objects.filter(vendor_code=vehicle.vendor_code).first()
+                vehicle_number = vehicle.vehicle_number
+                vendor_name = vendor.vendor_name if vendor else "NOT_FOUND"
+                break
+        
+        if plc_comm:
+            return JsonResponse({
+                "status": "in_progress",
+                "uid": current_vehicle.uid,
+                "vehicle_number": vehicle_number,
+                "vendor_name": vendor_name,
+                "current_state": plc_comm.state,
+                "emergency": plc_comm.emergency,
+                "auto_manual": plc_comm.auto_manual,
+                "emergency_acknowledged": plc_comm.emergency_acknowledged,
+                "auto_manual_acknowledged": plc_comm.auto_manual_acknowledged,
+                "user_approved_skip_cycles": plc_comm.user_approved_skip_cycles,
+            })
+        else:
+            return JsonResponse({
+                "status": "in_progress",
+                "uid": current_vehicle.uid,
+                "vehicle_number": vehicle_number,
+                "vendor_name": vendor_name,
+                "current_state": "UNKNOWN",
+                "emergency": None,
+                "auto_manual": None,
+                "emergency_acknowledged": False,
+                "auto_manual_acknowledged": False,
+                "user_approved_skip_cycles": False,
+            })
+    
+    except Exception as e:
+        print(f"Error in get_current_status: {e}")
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+def acknowledge_emergency(request):
+    """Handle emergency popup acknowledgment - user wants to retake cycles"""
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        uid = data.get("uid")
+        retake_cycles = data.get("retake_cycles", True)
+        
+        plc_comm = PLC_COMM.objects.filter(uid=uid).first()
+        if plc_comm:
+            plc_comm.emergency_acknowledged = True
+            plc_comm.user_approved_skip_cycles = not retake_cycles
+            plc_comm.updated = timezone.now()
+            plc_comm.save()
+            
+            return JsonResponse({
+                "success": True,
+                "message": "Emergency acknowledged",
+                "retake_cycles": retake_cycles
+            })
+        else:
+            return JsonResponse({"success": False, "error": "No PLC record found"}, status=404)
+    
+    except Exception as e:
+        print(f"Error in acknowledge_emergency: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+def acknowledge_auto_manual(request):
+    """Handle auto_manual popup acknowledgment - user confirms or skips cycles"""
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        uid = data.get("uid")
+        user_action = data.get("user_action")  # "continue" or "skip_all_cycles"
+        
+        plc_comm = PLC_COMM.objects.filter(uid=uid).first()
+        if plc_comm:
+            plc_comm.auto_manual_acknowledged = True
+            if user_action == "skip_all_cycles":
+                plc_comm.user_approved_skip_cycles = True
+            plc_comm.updated = timezone.now()
+            plc_comm.save()
+            
+            return JsonResponse({
+                "success": True,
+                "message": "Auto manual acknowledged",
+                "user_action": user_action
+            })
+        else:
+            return JsonResponse({"success": False, "error": "No PLC record found"}, status=404)
+    
+    except Exception as e:
+        print(f"Error in acknowledge_auto_manual: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+
+@csrf_exempt
+def reset_system(request):
+    """Reset entire system - mark in-progress as ERROR and reset state"""
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+    
+    try:
+        data = json.loads(request.body)
+        uid = data.get("uid")
+        
+        # Mark current vehicle log as ERROR
+        current_vehicle = VEHICLE_LOGS.objects.filter(uid=uid, status="IN_PROGRESS").first()
+        if current_vehicle:
+            current_vehicle.status = "ERROR"
+            current_vehicle.error_message = "System reset by user"
+            current_vehicle.update_time = timezone.now()
+            current_vehicle.save()
+        
+        # Reset PLC_COMM
+        plc_comm = PLC_COMM.objects.filter(uid=uid).first()
+        if plc_comm:
+            plc_comm.state = "IDLE"
+            plc_comm.emergency = None
+            plc_comm.auto_manual = None
+            plc_comm.emergency_acknowledged = False
+            plc_comm.auto_manual_acknowledged = False
+            plc_comm.user_approved_skip_cycles = False
+            plc_comm.updated = timezone.now()
+            plc_comm.save()
+        
+        return JsonResponse({
+            "success": True,
+            "message": "System reset successfully"
+        })
+    
+    except Exception as e:
+        print(f"Error in reset_system: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
