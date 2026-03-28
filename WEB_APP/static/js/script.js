@@ -52,7 +52,7 @@ function updateCurrentStatus() {
             currentUID = data.uid;
             
             // Handle emergency status
-            if (data.emergency === 'active' && !emergencyModalOpen) {
+            if (data.emergency === 'ACTIVE' && !emergencyModalOpen) {
                 emergencyModalOpen = true;
                 autoManualModalOpen = false;
                 showEmergencyModal();
@@ -65,7 +65,7 @@ function updateCurrentStatus() {
             }
             
             // Handle auto_manual status
-            if (data.auto_manual === 'manual' && !autoManualModalOpen) {
+            if (data.auto_manual === 'MANUAL' && !autoManualModalOpen) {
                 autoManualModalOpen = true;
                 emergencyModalOpen = false;
                 showAutoManualModal();
@@ -80,6 +80,7 @@ function showEmergencyModal() {
 }
 
 function showEmergencyClearedModal() {
+    bootstrap.Modal.getInstance(document.getElementById('emergencyModal')).hide()
     const emergencyClearedModal = new bootstrap.Modal(document.getElementById('emergencyClearedModal'));
     emergencyClearedModal.show();
 }

@@ -660,7 +660,7 @@ class Manager:
         if not msg or msg.get("status") == "truck_not_present":
             print("[MANAGER] Waiting for truck presence …")
             self._barrier(action="check_truck")
-            time.sleep(1)
+            time.sleep(2)
             return
         
         if msg.get("status") == "truck_present":
@@ -674,7 +674,6 @@ class Manager:
                 print("[MANAGER] Manual mode — waiting for user confirmation …")
                 # Update database to trigger popup
                 db_update_plc_comm(self.uid, self.state.name, auto_manual="MANUAL")
-                self._barrier(action="check_truck")
                 time.sleep(1)
                 # Web app will handle this - popup will appear
                 return
