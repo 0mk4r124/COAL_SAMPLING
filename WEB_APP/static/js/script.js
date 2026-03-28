@@ -607,7 +607,34 @@ async function fetchSystemStatus() {
     }
 }
 
-setInterval(checkVehicle, 5000);
+function updateCameraImages() {
+    const url = `/api/live-ip-camera`;
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === "success") {
+                data.cameras.forEach((cam, idx) => {
+                    const slot = document.getElementById(`camera-slot-${idx + 1}`);
+                    if (!slot) return;
+                    let img = slot.querySelector("img");
+
+                    if (cam.image_url) {
+                        if (!img) {
+                            // Create img once if it doesn't exist
+                            img = document.createElement("img");
+                            slot.innerHTML = "";  // clear slot only first time
+                            slot.appendChild(img);
+                        }
+                        // Update src without creating new element → no blink
+                        img.src = `${cam.image_url}?t=${Date.now()}`;
+                    } else {
+                        slot.innerHTML = "No Camera Selected";
+                    }
+                });
+            }
+        })
+        .catch(err => console.error("Error fetching camera images:", err));
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
@@ -618,5 +645,8 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Update current state and emergency/auto_manual status every 2 seconds
     updateCurrentStatus(); // Initial check
-    setInterval(updateCurrentStatus, 2000);
+    setInterval(updateCurrentStatus, 5000);
+
+    setInterval(checkVehicle, 5000);
+    setInterval(updateCameraImages, 5000);
 });

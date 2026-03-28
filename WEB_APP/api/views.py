@@ -79,6 +79,42 @@ def serve_file(request):
         return HttpResponse(f"Image file not found on this server: {os.path.basename(file_path)}", 
                         status=404, content_type='text/plain')
 
+def live_ip_camera(request):
+    """API endpoint for all 4 IP camera live images"""
+    try: 
+        camera_paths = [
+            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM1_REDUCED.jpg",
+            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM2_REDUCED.jpg",
+            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM3_REDUCED.jpg",
+        ]
+        
+        cameras = []
+        for i, path in enumerate(camera_paths, start=1):
+            if os.path.exists(path):
+                cameras.append({
+                    "camera_id": i,
+                    "camera_name": f"Camera {i}",
+                    "image_url": f'/api/serve-file?file={path}&t={timezone.now().timestamp()}',
+                    "has_image": True,
+                    "status": "online"
+                })
+            else:
+                cameras.append({
+                    "camera_id": i,
+                    "camera_name": f"Camera {i}",
+                    "image_url": "",
+                    "has_image": False,
+                    "status": "no_image"
+                })
+        
+        return JsonResponse({
+            "status": "success", 
+            "cameras": cameras,
+            "timestamp": timezone.now().isoformat()
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+    
 def add_vehicle(request):
     if request.method != "POST":
         return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
