@@ -778,7 +778,7 @@ class Manager:
             self.cycle = cycle_num
             self._sampler(action="start_cycle", cycle=cycle_num)
             print("[MANAGER] CYCLE START GIVEN !!!")
-            self._sampler(action="start_cycle", cycle=cycle_num)
+            time.sleep(10)
             self._goto(State.CYCLE_CAPTURE)
             return
         
