@@ -42,11 +42,12 @@ class PLCCOMMINCATION:
             print("closePLCConnection() Exception is : "+ str(e))
 
     ''' Read PLC Functions '''
-    def readIntFromPLC(self, clientConn, db_col_start_buffer_pos): 
+    def readIntFromPLC(self, clientConn, db_col_start_buffer_pos, DB_READ_NUMBER=None): 
         row_data = None
+        if DB_READ_NUMBER is None: DB_READ_NUMBER = self.DB_READ_NUMBER
         try:
             if self.isPLCConnected(clientConn) is True:
-                db = clientConn.db_read(self.DB_READ_NUMBER, db_col_start_buffer_pos, 2) 
+                db = clientConn.db_read(DB_READ_NUMBER, db_col_start_buffer_pos, 2) 
                 row_data = util.get_int(db, 0)
             else:
                 print("PLC not connected")

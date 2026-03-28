@@ -153,6 +153,7 @@ class BarrierController:
 
             first_bit = self.plc.readIntFromPLC(self.client, TRUCK_PRESENT1)
             second_bit = self.plc.readIntFromPLC(self.client, TRUCK_PRESENT2)
+            print(first_bit, second_bit)
 
             if first_bit == 1 and second_bit == 1:
                 present = True

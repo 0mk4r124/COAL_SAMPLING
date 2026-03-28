@@ -6,7 +6,8 @@ from DEPENDANT.MQTT import MQTT
 
 PLC_IP = "192.168.1.1"
 
-DB_READ = 24
+DB_READ_1 = 24
+DB_READ_2 = 20
 DB_WRITE = 23
 
 # INPUT OFFSETS
@@ -16,10 +17,10 @@ Y_LEFT_SENSOR_FB = 4
 Y_RIGHT_SENSOR_FB = 6
 Z_UP_SENSOR_FB = 8
 Z_DOWN_SENSOR_FB = 10
-HEARTBIT = 12
-AUTO_MANUAL = 14
-CYCLE_COMPLETE = 16
-EMERGENCY_STOP = 18
+EMERGENCY_STOP = 14
+AUTO_MANUAL = 16
+CYCLE_COMPLETE = 18
+CYCLE_STATUS = 0
 
 # OUTPUT OFFSETS
 CYCLE_START = 0
@@ -28,6 +29,7 @@ X_AXIS_FORWORD = 4
 X_AXIS_REVERSE = 6
 Y_AXIS_LEFT = 8
 Y_AXIS_RIGHT = 10
+HEARTBIT = 12
 
 TOPIC_IN = "manager/plc_sampler"
 TOPIC_OUT = "plc_sampler/status"
@@ -38,7 +40,7 @@ class SamplerController:
 
         self.total_x = total_x
         self.total_y = total_y
-        self.plc = PLCCOMMINCATION(PLC_IP, DB_READ, DB_WRITE, "REED")
+        self.plc = PLCCOMMINCATION(PLC_IP, DB_READ_1, DB_WRITE, "REED")
         self.mqtt = MQTT("PLC_SAMPLER")
         self.client = self.plc.createConnection()
         self._emergency_state_last = 1  # Track last emergency state (1=normal, 0=emergency)
@@ -48,6 +50,8 @@ class SamplerController:
         try:
 
             auto_manual = self.plc.readIntFromPLC(self.client, AUTO_MANUAL)
+            print(auto_manual)
+            time.sleep(1)
             
         except Exception as e:
             print(f"[PLC_BARRIER] Truck presence error: {e}")
@@ -57,9 +61,22 @@ class SamplerController:
     def check_sample_cycle_complete(self):
         sample_cycle_complete = 0
         try:
+            sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_STATUS, DB_READ_NUMBER=DB_READ_2)
+            
+            print(sample_cycle_complete)
+            time.sleep(1)
+        except Exception as e:
+            print(f"[PLC_BARRIER] Truck presence error: {e}")
 
+        return sample_cycle_complete
+    
+    def check_all_samples_status(self):
+        sample_cycle_complete = 0
+        try:
             sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_COMPLETE)
             
+            print(sample_cycle_complete)
+            time.sleep(1)
         except Exception as e:
             print(f"[PLC_BARRIER] Truck presence error: {e}")
 
@@ -300,6 +317,20 @@ class SamplerController:
             self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
             raise
 
+    # def start_cycle(self, cycle: int = 1):
+
+    #     try:
+    #         print(f"[PLC_SAMPLER] Starting sampling cycle {cycle}")
+
+    #         value = self.plc.readIntFromPLC(self.client, CYCLE_START, DB_READ_NUMBER=23)
+    #         print(f"[PLC_SAMPLER] Cycle {value} initiated.")
+
+    #     except Exception as e:
+
+    #         msg = f"Cycle start error: {e}"
+    #         print(f"[PLC_SAMPLER] {msg}")
+    #         self.mqtt.publish(TOPIC_OUT, {"status": "cycle_error", "msg": msg})
+
     def start_cycle(self, cycle: int = 1):
 
         try:
@@ -308,6 +339,7 @@ class SamplerController:
             self.plc.writeIntToPLC(self.client, CYCLE_START, 1)
             time.sleep(1)
             self.plc.writeIntToPLC(self.client, CYCLE_START, 0)
+            # self.stop_cycle()
             print(f"[PLC_SAMPLER] Cycle {cycle} initiated.")
 
         except Exception as e:
@@ -322,7 +354,6 @@ class SamplerController:
 
             print("[PLC_SAMPLER] Stop cycle requested")
 
-            time.sleep(120)
             self.plc.writeIntToPLC(self.client, CYCLE_STOP, 1)
             time.sleep(1)
             self.plc.writeIntToPLC(self.client, CYCLE_STOP, 0)
@@ -337,14 +368,31 @@ class SamplerController:
         """Reset all PLC outputs to 0"""
         try:
             print("[PLC_SAMPLER] Resetting PLC outputs …")
-            self.plc.writeIntToPLC(self.client, CYCLE_START, 0)
-            self.plc.writeIntToPLC(self.client, CYCLE_STOP, 0)
+            self.stop_cycle()
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+            time.sleep(0.5)
+            # self.plc.writeIntToPLC(self.client, CYCLE_START, 0)
+            # self.plc.writeIntToPLC(self.client, CYCLE_STOP, 1)
             self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+            time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 0)
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+            time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 0)
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+            time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+            time.sleep(0.5)
             self.mqtt.publish(TOPIC_OUT, {"status": "reset_done"})
             print("[PLC_SAMPLER] PLC reset complete.")
+            self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
         except Exception as e:
             msg = f"Reset error: {e}"
             print(f"[PLC_SAMPLER] {msg}")
@@ -411,7 +459,6 @@ class SamplerController:
                     action = data.get("action", "")
                     self.mqtt.data = {**data, "_consumed": True}
 
-
                     if action == "move_y_right":
                         duration = data.get("duration", 0)
                         self.move_y_right(duration)
@@ -442,15 +489,20 @@ class SamplerController:
                         if self.move_home():
                             x = data.get("x", 0)
                             y = data.get("y", 0)
-                            self.move_y_left((x*self.total_y)/100)
-                            self.move_x_reverse((y*self.total_x)/100)
+                            self.move_y_left((y*self.total_y)/100)
+                            self.move_x_reverse((x*self.total_x)/100)
                             time.sleep(2)
                             self.mqtt.publish(TOPIC_OUT, {"status": "position_set"})
                     elif action == "check_sample_cycle_complete":
                         if self.check_sample_cycle_complete():
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
+                        else:
+                            self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_not_complete"})
                     elif action == "check_emergency_status":
                         self.check_emergency_status()
+                    elif action == "check_all_samples_status":
+                        if self.check_all_samples_status(): self.mqtt.publish(TOPIC_OUT, {"status": "all_samples_collected"})
+                        else:  self.mqtt.publish(TOPIC_OUT, {"status": "all_samples_not_collected"})
                     elif action == "sample_cycle_stop":
                         self.stop_cycle()
                         self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_stop_comp"})

@@ -68,18 +68,21 @@ class CamController:
             print(f"[CAM_CAPTURE] {name} init  {'OK' if ok else 'FAILED'}")
 
     def _capture(self, cam_name: str, save_path: str) -> str:
-        for _ in range(3):  # Retry up to 3 times
-            try:
-                img = self.cams[cam_name].capture(save=False)
-                if img is not None:
-                    path = save_frame(img, save_path)
-                    print(f"[CAM_CAPTURE] {cam_name} single capture saved: {path}")
-                    return path
-                else:
-                    print(f"[CAM_CAPTURE] {cam_name} capture returned None")
-            except Exception as e:
-                print(f"[CAM_CAPTURE] {cam_name} single capture error: {e}")
-            time.sleep(0.05)  # Wait before retrying
+        try:
+            with self._lock:
+                img = self._last_frame.get(cam_name)
+
+            if img is None:
+                print(f"[CAM_CAPTURE] {cam_name} no frame available from background thread")
+                return None
+
+            path = save_frame(img, save_path)
+            print(f"[CAM_CAPTURE] {cam_name} single capture (from buffer) saved: {path}")
+            return path
+
+        except Exception as e:
+            print(f"[CAM_CAPTURE] {cam_name} single capture error: {e}")
+            return None
 
     def _bg_capture_loop(self, cam_name: str):
         print(f"[CAM_CAPTURE] {cam_name} background capture thread started")
@@ -94,8 +97,8 @@ class CamController:
                     
                     # Generate filename with timestamp
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                    temp_full_path = os.path.join(TEMP_PATH, f"{cam_name}_FULL_{timestamp}.jpg")
-                    temp_reduced_path = os.path.join(TEMP_PATH, f"{cam_name}_REDUCED_{timestamp}.jpg")
+                    temp_full_path = os.path.join(TEMP_PATH, f"{cam_name}_FULL.jpg")
+                    temp_reduced_path = os.path.join(TEMP_PATH, f"{cam_name}_REDUCED.jpg")
                     
                     # Save full resolution
                     # save_frame(img, temp_full_path)

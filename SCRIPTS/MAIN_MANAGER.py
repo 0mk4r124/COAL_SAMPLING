@@ -29,7 +29,8 @@ DB_WAIT_TIMEOUT = 900
 TOTAL_CYCLES    = 3
 HOME_POSITION_TIMEOUT = 120
 SAMPLE_CYCLE_TIMEOUT = 240
-POSITION_CONFIRMATION_TIMEOUT = 30
+POSITION_CONFIRMATION_TIMEOUT = 240
+CLOSE_CYCLE_WAIT_TIME = 180
 
 TEMP_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
 RESULT_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RESULT/"
@@ -97,6 +98,7 @@ class State(Enum):
     CYCLE_CONFIRM            = auto()
     CYCLE_CAPTURE            = auto()
     CYCLE_DONE               = auto()
+    SAMPLE_COLLECTION        = auto()
     CYCLE_EMERGENCY_WAIT     = auto()
     RED_SIGNAL               = auto()
     COMPLETE_FINAL           = auto()
@@ -181,12 +183,12 @@ def db_create_log(uid: str, rfids: list, paths: dict) -> bool:
                 QR_CODE_PATH)
             VALUES
                 (
-                %s, %s, %s, %s, %s, 
+                %s, %s, %s, %s, 
                 %s, 
                 %s, 
                 %s,
                 %s,
-                %s,
+                %s
                 )
             """,
             (uid, "|".join(rfids), "IN_PROGRESS", now, 
@@ -245,8 +247,32 @@ def db_complete_log(uid: str) -> bool:
     finally:
         if db: db.close()
 
+def db_add_plc_comm(uid: str, state: str) -> bool:
+    db = None
+    try:
+        db = _db_connect()
+        cur = db.cursor()
+        now = datetime.now()
+        
+        cur.execute(
+            """
+            INSERT INTO PLC_COMM
+                (UID, STATE, UPDATED)
+            VALUES
+                (%s, %s, %s)
+            """,
+            (uid, state, now)
+        )
+        
+        db.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] db_update_plc_comm error: {e}")
+        return False
+    finally:
+        if db: db.close()
+
 def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual: str = None) -> bool:
-    """Update or create PLC_COMM record to track state and status"""
     db = None
     try:
         db = _db_connect()
@@ -262,18 +288,6 @@ def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual:
             """,
             (state, emergency, auto_manual, now, uid)
         )
-        
-        # If no rows were updated, insert new record
-        if cur.rowcount == 0:
-            cur.execute(
-                """
-                INSERT INTO PLC_COMM
-                    (UID, STATE, EMERGENCY, AUTO_MANUAL, UPDATED)
-                VALUES
-                    (%s, %s, %s, %s, %s)
-                """,
-                (uid, state, emergency, auto_manual, now)
-            )
         
         db.commit()
         return True
@@ -302,6 +316,7 @@ class Manager:
         State.CYCLE_CONFIRM        : "_handle_cycle_confirm",
         State.CYCLE_CAPTURE        : "_handle_cycle_capture",
         State.CYCLE_DONE           : "_handle_cycle_done",
+        State.SAMPLE_COLLECTION    : "_handle_all_samples_collection",
         State.CYCLE_EMERGENCY_WAIT : "_handle_cycle_emergency_wait",
         State.COMPLETE_FINAL       : "_handle_complete_final",
         State.GREEN_SIGNAL         : "_handle_green_signal",
@@ -568,6 +583,7 @@ class Manager:
             
             # Create log entry
             db_create_log(self.uid, self.rfids, self.paths)
+            db_add_plc_comm(self.uid, self.state.name)
             self._goto(State.OPEN_BARRIER)
         else:
             print("[MANAGER] RFID not in DB — will poll …")
@@ -631,34 +647,37 @@ class Manager:
         self._goto(State.VEHICLE_PLACEMENT)
 
     def _handle_vehicle_placement(self):
-        msg = self._pop("plc_barrier/status")
+        self._goto(State.RED_SIGNAL)
+        # msg = self._pop("plc_barrier/status")
         
-        # Check if truck is present at both positions
-        if not msg or msg.get("status") == "truck_not_present":
-            print("[MANAGER] Waiting for truck presence …")
-            self._barrier(action="check_truck")
-            return
+        # # Check if truck is present at both positions
+        # if not msg or msg.get("status") == "truck_not_present":
+        #     print("[MANAGER] Waiting for truck presence …")
+        #     self._barrier(action="check_truck")
+        #     time.sleep(1)
+        #     return
         
-        if msg.get("status") == "truck_present":
-            print("[MANAGER] Truck placement confirmed.")
-            # Check for AUTO/MANUAL signal
-            self._sampler(action="auto_manual")
-            time.sleep(2)  # Give PLC time to update status
-            msg = self._pop("plc_sampler/status")
-            auto_manual_status = msg.get("status", True)
-            if auto_manual_status == "auto_manual_off":
-                print("[MANAGER] Manual mode — waiting for user confirmation …")
-                # Update database to trigger popup
-                db_update_plc_comm(self.uid, self.state.name, auto_manual="manual")
-                self._barrier(action="check_truck")
-                # Web app will handle this - popup will appear
-                return
+        # if msg.get("status") == "truck_present":
+        #     print("[MANAGER] Truck placement confirmed.")
+        #     # Check for AUTO/MANUAL signal
+        #     self._sampler(action="auto_manual")
+        #     time.sleep(2)  # Give PLC time to update status
+        #     msg = self._pop("plc_sampler/status")
+        #     auto_manual_status = msg.get("status", True)
+        #     if auto_manual_status == "auto_manual_off":
+        #         print("[MANAGER] Manual mode — waiting for user confirmation …")
+        #         # Update database to trigger popup
+        #         db_update_plc_comm(self.uid, self.state.name, auto_manual="manual")
+        #         self._barrier(action="check_truck")
+        #         time.sleep(1)
+        #         # Web app will handle this - popup will appear
+        #         return
             
-            # Set red signal
-            self._barrier(action="red_signal")
-            self._goto(State.RED_SIGNAL)
-        else:
-            print("[MANAGER] Waiting for vehicle to be placed …")
+        #     # Set red signal
+        #     self._barrier(action="red_signal")
+        #     self._goto(State.RED_SIGNAL)
+        # else:
+        #     print("[MANAGER] Waiting for vehicle to be placed …")
 
     def _handle_red_signal(self):
         msg = self._pop("plc_barrier/status")
@@ -693,7 +712,7 @@ class Manager:
     def _handle_auger_home_pos(self):
         print("[MANAGER] Setting auger to home position …")
         self._sampler(action="move_home")
-        
+        time.sleep(2)
         msg = self._pop("plc_sampler/status")
         if msg and msg.get("status") == "auger_home":
             print("[MANAGER] Auger at home position.")
@@ -706,6 +725,8 @@ class Manager:
             self._current_sample_index = 0
             self._successful_cycles = 0
             self._goto(State.CYCLE_POSITION)
+
+        time.sleep(10)
 
     def _handle_cycle_position(self):
         if self._successful_cycles >= TOTAL_CYCLES:
@@ -731,6 +752,10 @@ class Manager:
             if self.ai_model:
                 try: self._confirm_auger_position_with_movement_loop(self.positions[self._current_sample_index]["area"])
                 except: pass
+
+            cycle_num = self._successful_cycles + 1
+            self.cycle = cycle_num
+            self._sampler(action="start_cycle", cycle=cycle_num)
             self._goto(State.CYCLE_CAPTURE)
             return
         
@@ -754,14 +779,8 @@ class Manager:
             })
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
-        
-        cycle_num = self._successful_cycles + 1
-        self.cycle = cycle_num
 
-        print(f"[MANAGER] Starting sampling cycle {cycle_num} …")
-        self._sampler(action="start_cycle", cycle=cycle_num)
-        self._sampler(action="check_sample_cycle_complete")
-
+        self._sampler(action="check_sample_cycle_complete") 
         self._goto(State.CYCLE_DONE)
 
     def _handle_cycle_done(self):
@@ -796,8 +815,8 @@ class Manager:
             if self._successful_cycles >= TOTAL_CYCLES:
                 print(f"[MANAGER] All {TOTAL_CYCLES} successful cycles completed.")
                 time.sleep(100)  # Ensure PLC has time to update status
-                self._sampler(action="sample_cycle_stop")
-                self._goto(State.COMPLETE_FINAL)
+                self._sampler(action="check_all_samples_status")
+                self._goto(State.SAMPLE_COLLECTION)
             else:
                 self._cam(action="cam3_single", path=self.paths[f"SAMPLE_{self._successful_cycles}_IMG_PATH"])
                 print(f"[MANAGER] Moving to next sampling position …")
@@ -816,6 +835,36 @@ class Manager:
         else:
             print("[MANAGER] Cycle inrpogress — waiting …")
             self._sampler(action="check_sample_cycle_complete")
+            time.sleep(5)
+            
+    def _handle_all_samples_collection(self):
+        """Start sampling cycle"""
+        # Check for emergency stop before starting cycle
+        msg = self._pop("plc_sampler/status")
+
+        if msg and msg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop detected before cycle start.")
+            self._emergency_return_state = State.CYCLE_CAPTURE
+            # Update database to trigger emergency popup
+            db_update_plc_comm(self.uid, self.state.name, emergency="active")
+            self.mqtt.publish("fe/notification", {
+                "type": "emergency_stop",
+                "message": "Emergency stop triggered on Sampler PLC. Waiting for clearance...",
+                "state": "emergency_triggered"
+            })
+            self._goto(State.CYCLE_EMERGENCY_WAIT)
+            return
+        
+        elif msg and msg.get("status") == "all_samples_collected":
+            now = time.time()
+            while time.time() - now < CLOSE_CYCLE_WAIT_TIME:
+                print("[MANAGER] Waiting for Cycle Stop.")
+            self._sampler(action="sample_cycle_stop")
+            self._goto(State.COMPLETE_FINAL)
+
+        else:
+            self._sampler(action="check_all_samples_status")
+            time.sleep(1)
 
     def _handle_cycle_emergency_wait(self):
         print("[MANAGER] Waiting for emergency stop clearance on Sampler PLC …")

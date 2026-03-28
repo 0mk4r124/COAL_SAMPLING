@@ -48,7 +48,14 @@ class MASKRCNN:
     def register_modeldatasets(self):
         try:
             tag = self.tag
-            torch.cuda.set_device(self.GPU_ID)
+
+            if torch.cuda.is_available() and not self.debugMode:
+                torch.cuda.set_device(self.GPU_ID)
+                device = f"cuda:{self.GPU_ID}"
+            else:
+                print("[INFO] CUDA not available using CPU")
+                device = "cpu"
+
             self.labelMap = self.__loadLablMap__()
             self.class_list = np.array(list(self.labelMap.values()))
             MetadataCatalog.get(tag).set(thing_classes=self.class_list)
@@ -57,15 +64,15 @@ class MASKRCNN:
             cfg = get_cfg()
             cfg.TEST.DETECTIONS_PER_IMAGE = 500
             cfg.merge_from_file(self.mrcnn_config_fl)
-            if self.debugMode: cfg.merge_from_list(["MODEL.DEVICE", "cpu"])
-            else: cfg.MODEL.DEVICE = f"cuda:{self.GPU_ID}"
+            cfg.MODEL.DEVICE = device
 
             cfg.MODEL.ROI_HEADS.NUM_CLASSES = len(self.labelMap)
             cfg.OUTPUT_DIR = self.mrcnn_model_loc
             cfg.MODEL.WEIGHTS = os.path.join(cfg.OUTPUT_DIR, self.mrcnn_model_fl)
             cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = self.detection_thresh
+
             self.predictor = DefaultPredictor(cfg)
-            
+
         except Exception as e:
             print(f"register_modeldatasets() Exception is: {e}")
             print(f"{traceback.format_exc()}")
@@ -112,9 +119,9 @@ class MASKRCNN:
             ))
 
             # if self.debugMode is True:
-            # visualizer = Visualizer(img[:, :, ::-1], metadata=self.metadata, scale=1, instance_mode=ColorMode.IMAGE)
-            # img = visualizer.draw_instance_predictions(output["instances"].to("cpu"))
-            # img = np.array(img.get_image()[:, :, ::-1])
+            visualizer = Visualizer(img[:, :, ::-1], metadata=self.metadata, scale=1, instance_mode=ColorMode.IMAGE)
+            img = visualizer.draw_instance_predictions(output["instances"].to("cpu"))
+            img = np.array(img.get_image()[:, :, ::-1])
 
         except Exception as e:
             print(f"run_inference() Exception is : {e}")
