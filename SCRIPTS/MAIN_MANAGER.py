@@ -386,39 +386,47 @@ class Manager:
             if row:
                 return rfid, row
         return None, None
+    
+    def _wait_for_file(self, check_path_1: str, check_path_3: str, timeout: float = 10.0) -> bool:
+        start = time.time()
 
+        while time.time() - start < timeout:
+            msg = self._pop("camera/status")
+            if msg and msg.get("status") == "cam1_done":
+                cam1_path = msg.get("path")
+                if os.path.exists(cam1_path) and (check_path_1 == cam1_path): cam1_done = True
+                time.sleep(0.05)
+            if msg and msg.get("status") == "cam3_done":
+                cam3_path = msg.get("path")
+                if os.path.exists(cam3_path) and (check_path_3 == cam3_path): cam3_done = True
+                time.sleep(0.05)
+
+        return False
+    
     def _capture_images_for_confirmation(self, loop_num: int, movement_type: str = "") -> tuple[str, str] | None:
         try:
-            # Create INF directory structure
             inf_dir = os.path.join(INF_IMG, self.date_file, self.uid)
             os.makedirs(inf_dir, exist_ok=True)
             
-            # Generate filenames
             suffix = f"_loop{loop_num}_{movement_type}" if movement_type else f"_loop{loop_num}"
-            cam1_filename = f"CAM1{suffix}.jpg"
-            cam3_filename = f"CAM3{suffix}.jpg"
-            
-            cam1_path = os.path.join(inf_dir, cam1_filename)
-            cam3_path = os.path.join(inf_dir, cam3_filename)
-            
-            print(f"[MANAGER] Capturing images for confirmation (Loop {loop_num}, Movement: {movement_type})")
-            
-            # Publish capture commands
-            self._cam(action="capture_raw", camera="cam1", path=cam1_path)
-            time.sleep(0.5)
-            self._cam(action="capture_raw", camera="cam3", path=cam3_path)
-            
-            # Wait for captures to complete
-            time.sleep(2)
-            
-            # Verify files exist
-            if os.path.exists(cam1_path) and os.path.exists(cam3_path):
-                print(f"[MANAGER] Images captured successfully: CAM1={cam1_path}, CAM3={cam3_path}")
+            cam1_path = os.path.join(inf_dir, f"CAM1{suffix}.jpg")
+            cam3_path = os.path.join(inf_dir, f"CAM3{suffix}.jpg")
+
+            print(f"[MANAGER] Capturing images (Loop {loop_num}, {movement_type})")
+
+            # Trigger capture
+            self._cam(action="cam1_single", cam="cam1", path=cam1_path)
+            self._cam(action="cam3_single", cam="cam3", path=cam3_path)
+
+            # Wait deterministically instead of sleep
+            ok1 = self._wait_for_file(cam1_path, cam3_path)
+
+            if ok1:
+                print(f"[MANAGER] Capture OK: {cam1_path}, {cam3_path}")
                 return (cam1_path, cam3_path)
-            else:
-                print(f"[MANAGER] Image capture failed - files not created")
-                return None
-        
+
+            return None
+
         except Exception as e:
             print(f"[MANAGER] Error capturing images: {e}")
             return None
@@ -445,7 +453,7 @@ class Manager:
             print("\n[MANAGER] ═══ Loop 2/5: Move Right ═══")
             print(f"[MANAGER] Moving Y-axis right for {MOVEMENT_DURATION}s…")
             self._sampler(action="move_y_right", duration=MOVEMENT_DURATION)
-            time.sleep(MOVEMENT_DURATION + 2)  # Wait for movement to complete
+            time.sleep(MOVEMENT_DURATION + 3)  # Wait for movement to complete
             
             images = self._capture_images_for_confirmation(2, "right")
             if images:
@@ -457,13 +465,13 @@ class Manager:
             
             print(f"[MANAGER] Moving Y-axis left for {MOVEMENT_DURATION}s (returning to original)…")
             self._sampler(action="move_y_left", duration=MOVEMENT_DURATION)
-            time.sleep(MOVEMENT_DURATION + 2)
+            time.sleep(MOVEMENT_DURATION + 3)
             
             # ─── Loop 3: Move Left ─────────────────────────────────────────────────
             print("\n[MANAGER] ═══ Loop 3/5: Move Left ═══")
             print(f"[MANAGER] Moving Y-axis left for {MOVEMENT_DURATION}s…")
             self._sampler(action="move_y_left", duration=MOVEMENT_DURATION)
-            time.sleep(MOVEMENT_DURATION + 2)
+            time.sleep(MOVEMENT_DURATION + 3)
             
             images = self._capture_images_for_confirmation(3, "left")
             if images:
@@ -475,13 +483,13 @@ class Manager:
             
             print(f"[MANAGER] Moving Y-axis right for {MOVEMENT_DURATION}s (returning to original)…")
             self._sampler(action="move_y_right", duration=MOVEMENT_DURATION)
-            time.sleep(MOVEMENT_DURATION + 2)
+            time.sleep(MOVEMENT_DURATION + 3)
             
             # ─── Loop 4: Move Forward ──────────────────────────────────────────────
             print("\n[MANAGER] ═══ Loop 4/5: Move Forward ═══")
             print(f"[MANAGER] Moving X-axis forward for {MOVEMENT_DURATION}s…")
             self._sampler(action="move_x_forward", duration=MOVEMENT_DURATION)
-            time.sleep(MOVEMENT_DURATION + 2)
+            time.sleep(MOVEMENT_DURATION + 3)
             
             images = self._capture_images_for_confirmation(4, "forward")
             if images:
@@ -647,37 +655,36 @@ class Manager:
         self._goto(State.VEHICLE_PLACEMENT)
 
     def _handle_vehicle_placement(self):
-        self._goto(State.RED_SIGNAL)
-        # msg = self._pop("plc_barrier/status")
+        msg = self._pop("plc_barrier/status")
         
-        # # Check if truck is present at both positions
-        # if not msg or msg.get("status") == "truck_not_present":
-        #     print("[MANAGER] Waiting for truck presence …")
-        #     self._barrier(action="check_truck")
-        #     time.sleep(1)
-        #     return
+        # Check if truck is present at both positions
+        if not msg or msg.get("status") == "truck_not_present":
+            print("[MANAGER] Waiting for truck presence …")
+            self._barrier(action="check_truck")
+            time.sleep(1)
+            return
         
-        # if msg.get("status") == "truck_present":
-        #     print("[MANAGER] Truck placement confirmed.")
-        #     # Check for AUTO/MANUAL signal
-        #     self._sampler(action="auto_manual")
-        #     time.sleep(2)  # Give PLC time to update status
-        #     msg = self._pop("plc_sampler/status")
-        #     auto_manual_status = msg.get("status", True)
-        #     if auto_manual_status == "auto_manual_off":
-        #         print("[MANAGER] Manual mode — waiting for user confirmation …")
-        #         # Update database to trigger popup
-        #         db_update_plc_comm(self.uid, self.state.name, auto_manual="manual")
-        #         self._barrier(action="check_truck")
-        #         time.sleep(1)
-        #         # Web app will handle this - popup will appear
-        #         return
+        if msg.get("status") == "truck_present":
+            print("[MANAGER] Truck placement confirmed.")
+            # Check for AUTO/MANUAL signal
+            self._sampler(action="auto_manual")
+            time.sleep(2)  # Give PLC time to update status
+            msg = self._pop("plc_sampler/status")
+            auto_manual_status = msg.get("status", True)
+            if auto_manual_status == "auto_manual_off":
+                print("[MANAGER] Manual mode — waiting for user confirmation …")
+                # Update database to trigger popup
+                db_update_plc_comm(self.uid, self.state.name, auto_manual="MANUAL")
+                self._barrier(action="check_truck")
+                time.sleep(1)
+                # Web app will handle this - popup will appear
+                return
             
-        #     # Set red signal
-        #     self._barrier(action="red_signal")
-        #     self._goto(State.RED_SIGNAL)
-        # else:
-        #     print("[MANAGER] Waiting for vehicle to be placed …")
+            # Set red signal
+            self._barrier(action="red_signal")
+            self._goto(State.RED_SIGNAL)
+        else:
+            print("[MANAGER] Waiting for vehicle to be placed …")
 
     def _handle_red_signal(self):
         msg = self._pop("plc_barrier/status")
@@ -704,6 +711,7 @@ class Manager:
         status = msg.get("status", "")
         if status == "barrier_closed":
             print("[MANAGER] Barrier closed — moving auger to home …")
+            self._sampler(action="move_home")
             self._goto(State.AUGER_HOME_POS)
         elif status == "barrier_error":
             print(f"[MANAGER] Barrier error: {msg.get('msg')}")
@@ -711,9 +719,16 @@ class Manager:
 
     def _handle_auger_home_pos(self):
         print("[MANAGER] Setting auger to home position …")
-        self._sampler(action="move_home")
         time.sleep(2)
+
         msg = self._pop("plc_sampler/status")
+        if msg and msg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop detected waiting until reset !")
+            self._emergency_return_state = State.AUGER_HOME_POS
+            db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
+            self._goto(State.CYCLE_EMERGENCY_WAIT)
+            return
+
         if msg and msg.get("status") == "auger_home":
             print("[MANAGER] Auger at home position.")
             self._current_sample_index = 0
@@ -726,6 +741,7 @@ class Manager:
             self._successful_cycles = 0
             self._goto(State.CYCLE_POSITION)
 
+        self._sampler(action="move_home")
         time.sleep(10)
 
     def _handle_cycle_position(self):
@@ -746,6 +762,13 @@ class Manager:
 
     def _handle_cycle_confirm(self):
         msg = self._pop("plc_sampler/status")
+
+        if msg and msg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop detected waiting until reset !")
+            self._emergency_return_state = State.AUGER_HOME_POS
+            db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
+            self._goto(State.CYCLE_EMERGENCY_WAIT)
+            return
         
         if msg and msg.get("status") == "position_set":
             print("[MANAGER] Auger positioned — waiting for AI confirmation …")
@@ -767,16 +790,11 @@ class Manager:
         """Start sampling cycle"""
         # Check for emergency stop before starting cycle
         msg = self._pop("plc_sampler/status")
+
         if msg and msg.get("status") == "emergency_stop":
-            print("[MANAGER] Emergency stop detected before cycle start.")
-            self._emergency_return_state = State.CYCLE_CAPTURE
-            # Update database to trigger emergency popup
-            db_update_plc_comm(self.uid, self.state.name, emergency="active")
-            self.mqtt.publish("fe/notification", {
-                "type": "emergency_stop",
-                "message": "Emergency stop triggered on Sampler PLC. Waiting for clearance...",
-                "state": "emergency_triggered"
-            })
+            print("[MANAGER] Emergency stop detected waiting until reset !")
+            self._emergency_return_state = State.AUGER_HOME_POS
+            db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
 
@@ -792,17 +810,10 @@ class Manager:
         
         status = msg.get("status", "")
         
-        # Check for emergency stop during cycle
-        if status == "emergency_stop":
-            print("[MANAGER] Emergency stop detected during cycle execution.")
-            self._emergency_return_state = State.CYCLE_DONE
-            # Update database to trigger emergency popup
-            db_update_plc_comm(self.uid, self.state.name, emergency="active")
-            self.mqtt.publish("fe/notification", {
-                "type": "emergency_stop",
-                "message": "Emergency stop triggered on Sampler PLC during cycle. Waiting for clearance...",
-                "state": "emergency_triggered"
-            })
+        if msg and msg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop detected waiting until reset !")
+            self._emergency_return_state = State.AUGER_HOME_POS
+            db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
         
@@ -843,15 +854,9 @@ class Manager:
         msg = self._pop("plc_sampler/status")
 
         if msg and msg.get("status") == "emergency_stop":
-            print("[MANAGER] Emergency stop detected before cycle start.")
-            self._emergency_return_state = State.CYCLE_CAPTURE
-            # Update database to trigger emergency popup
-            db_update_plc_comm(self.uid, self.state.name, emergency="active")
-            self.mqtt.publish("fe/notification", {
-                "type": "emergency_stop",
-                "message": "Emergency stop triggered on Sampler PLC. Waiting for clearance...",
-                "state": "emergency_triggered"
-            })
+            print("[MANAGER] Emergency stop detected waiting until reset !")
+            self._emergency_return_state = State.AUGER_HOME_POS
+            db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
         
@@ -871,30 +876,20 @@ class Manager:
         
         msg = self._pop("plc_sampler/status")
         if not msg:
-            # Keep requesting emergency status check
-            self._sampler(action="check_emergency_status")
             return
         
         status = msg.get("status", "")
-        
         # Emergency stop cleared - resume to CYCLE_CONFIRM and reset cycles
         if status == "emergency_cleared":
             print("[MANAGER] Emergency stop cleared. Resuming operation …")
-            self.mqtt.publish("fe/notification", {
-                "type": "emergency_cleared",
-                "message": "Emergency stop cleared. Resuming sampling process...",
-                "state": "emergency_cleared"
-            })
             
             # Reset successful cycles and return to CYCLE_CONFIRM
             self._successful_cycles = 0
             self._current_sample_index = 0
             self.positions = []
+            state = self._emergency_return_state
             self._emergency_return_state = None
-            self._goto(State.CYCLE_CONFIRM)
-        else:
-            # Still waiting for emergency clearance
-            self._sampler(action="check_emergency_status")
+            self._goto(state)
 
     def _handle_complete_final(self):
         """Complete sampling — generate QR code and save logs"""

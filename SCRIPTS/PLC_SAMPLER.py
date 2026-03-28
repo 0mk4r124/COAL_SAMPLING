@@ -81,33 +81,6 @@ class SamplerController:
             print(f"[PLC_BARRIER] Truck presence error: {e}")
 
         return sample_cycle_complete
-    
-    def check_emergency_status(self):
-        """
-        Check emergency stop status and detect state transitions.
-        Returns True if emergency is active (EMERGENCY_STOP = 0).
-        Publishes emergency_cleared when transitioning from 0 to 1.
-        """
-        try:
-            emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
-            
-            # Detect transition from emergency (0) to cleared (1)
-            if self._emergency_state_last == 0 and emergency == 1:
-                print("[PLC_SAMPLER] Emergency stop has been cleared!")
-                self.mqtt.publish(TOPIC_OUT, {"status": "emergency_cleared"})
-            
-            # Detect transition from normal (1) to emergency (0)
-            elif self._emergency_state_last == 1 and emergency == 0:
-                print("[PLC_SAMPLER] Emergency stop activated!")
-                self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop"})
-            
-            self._emergency_state_last = emergency
-            return emergency == 0  # Return True if emergency is active
-        
-        except Exception as e:
-            print(f"[PLC_SAMPLER] Emergency status read error: {e}")
-            return False
-    
 
     def sensors_ready(self):
 
@@ -317,20 +290,6 @@ class SamplerController:
             self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
             raise
 
-    # def start_cycle(self, cycle: int = 1):
-
-    #     try:
-    #         print(f"[PLC_SAMPLER] Starting sampling cycle {cycle}")
-
-    #         value = self.plc.readIntFromPLC(self.client, CYCLE_START, DB_READ_NUMBER=23)
-    #         print(f"[PLC_SAMPLER] Cycle {value} initiated.")
-
-    #     except Exception as e:
-
-    #         msg = f"Cycle start error: {e}"
-    #         print(f"[PLC_SAMPLER] {msg}")
-    #         self.mqtt.publish(TOPIC_OUT, {"status": "cycle_error", "msg": msg})
-
     def start_cycle(self, cycle: int = 1):
 
         try:
@@ -372,8 +331,6 @@ class SamplerController:
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
             time.sleep(0.5)
-            # self.plc.writeIntToPLC(self.client, CYCLE_START, 0)
-            # self.plc.writeIntToPLC(self.client, CYCLE_STOP, 1)
             self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
@@ -397,41 +354,33 @@ class SamplerController:
             msg = f"Reset error: {e}"
             print(f"[PLC_SAMPLER] {msg}")
             self.mqtt.publish(TOPIC_OUT, {"status": "reset_error", "msg": msg})
-
-    def run_cycle(self, x_duration):
-
-        try:
-            print("[PLC_SAMPLER] Waiting for sensors")
-            duration = 120
-            start_time = time.time()
-            while True:
+    
+    def wait_for_emergency_clearance(self):
+        count = 0
+        while True:
+            try:
+                count += 1
                 emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
-                if emergency == 0:
-                    print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
-                    self.reset()
-                    return False
+                time.sleep(0.5)
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 
-                if (time.time() - start_time) > duration:
-                    print("[PLC_SAMPLER] Sensors not ready")
-                    msg = "Error"
-                    self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+                # Detect transition from emergency (0) to cleared (1)
+                if self._emergency_state_last == 0 and emergency == 1:
+                    print("[PLC_SAMPLER] Emergency stop has been cleared!")
+                    self.mqtt.publish(TOPIC_OUT, {"status": "emergency_cleared"})
                     break
-
-                if self.sensors_ready():
-                    print("[PLC_SAMPLER] Sensors ready")
-                    break
-                time.sleep(0.2)
-
-            self.move_x_reverse(x_duration)
-            self.move_y_left(self.total_y / 2)
-            self.start_cycle()
-
-        except Exception as e:
-
-            msg = f"Cycle execution error: {e}"
-            print(f"[PLC_SAMPLER] {msg}")
-            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
-
+                
+                else:
+                    if count>50:
+                        print("[PLC_SAMPLER] Emergency stop activated!")
+                        self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop"})
+                        count = 0
+                
+                self._emergency_state_last = emergency
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+            
+            except Exception as e:
+                print(f"[PLC_SAMPLER] Emergency status read error: {e}")
 
     def run(self):
 
@@ -443,15 +392,12 @@ class SamplerController:
 
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                self._emergency_state_last = emergency
                 if emergency == 0:
                     print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
                     self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop", "msg": "Code stopped manually due to emergency !"})
                     self.reset()
-                    now = time.time()
-                    while time.time() - now < 120:
-                        self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
-                        time.sleep(1)
-                        self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                    self.wait_for_emergency_clearance()
 
                 data = self.mqtt.data
                 if data and data.get("_consumed") is not True:
@@ -498,8 +444,6 @@ class SamplerController:
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
                         else:
                             self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_not_complete"})
-                    elif action == "check_emergency_status":
-                        self.check_emergency_status()
                     elif action == "check_all_samples_status":
                         if self.check_all_samples_status(): self.mqtt.publish(TOPIC_OUT, {"status": "all_samples_collected"})
                         else:  self.mqtt.publish(TOPIC_OUT, {"status": "all_samples_not_collected"})
@@ -511,15 +455,12 @@ class SamplerController:
                         self.reset()
 
                 emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                self._emergency_state_last = emergency
                 if emergency == 0:
                     print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
                     self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop", "msg": "Code stopped manually due to emergency !"})
                     self.reset()
-                    now = time.time()
-                    while time.time() - now < 120:
-                        self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
-                        time.sleep(1)
-                        self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                    self.wait_for_emergency_clearance()
                 
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
