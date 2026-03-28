@@ -36,14 +36,14 @@
 
                 <!-- State Display and Reset Button -->
                 <div class="row g-2 mb-3 align-items-center">
-                    <div class="col-md-8">
-                        <div class="alert alert-info mb-0">
+                    <div class="col-md-10">
+                        <div class="alert alert-info mb-0 fs-2">
                             <strong>Current State:</strong> <span id="currentState" class="badge bg-primary">IDLE</span>
                             <br>
                             <strong>Vehicle:</strong> <span id="dashVendorName">ABC Traders</span> | <span id="dashVehicleNumber">MH 12 AB 1234</span>
                         </div>
                     </div>
-                    <div class="col-md-4 text-end">
+                    <div class="col-md-2 text-end">
                         <button class="btn btn-danger" onclick="resetSystemConfirm()">
                             <i class="fas fa-exclamation-triangle"></i> Reset System
                         </button>
@@ -52,29 +52,16 @@
 
                 <!-- Images Row -->
                 <div class="row g-2 mb-3">
-                    <div class="col-4 text-center border border-3 rounded" id="camera-slot-1">
-                    </div>
-            
-                    <div class="col-4 text-center border border-3 rounded" id="camera-slot-2">
-                    </div>
-
-                    <div class="col-4 text-center border border-3 rounded">
-                        <div class=".flex-column fw-bold fs-1">
-                            <div><span class="text-danger fs-4">Vendor Name</span></div> 
-                            <div><span class="text-primary" id="vendorName">ABC Traders</span></div> 
+                    <div class="col-md-4 text-center">
+                        <div class="text-center border border-3 rounded video-box" id="camera-slot-2">
                         </div>
-                        <div class=".flex-column fw-bold fs-1">
-                            <div><span class="text-danger fs-4">Vehicle Number</span></div> 
-                            <div><span class="text-primary" id="vehicleNumber">MH 12 AB 1234</span></div> 
+                        <div class="text-center border border-3 rounded video-box" id="camera-slot-1">
                         </div>
                     </div>
-                </div>
-
-                <div class="row g-2 mb-3">
-                    <div class="col-4 text-center border border-3 rounded" id="camera-slot-3">
-                    </div>
             
-                    <div class="col-4 text-center">
+                    <div class="col-md-8 text-center">
+                        <div class="text-center border border-3 rounded video-box" id="camera-slot-3">
+                        </div>
                     </div>
                 </div>
 

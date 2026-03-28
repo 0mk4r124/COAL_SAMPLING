@@ -87,6 +87,11 @@ def live_ip_camera(request):
             "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM2_REDUCED.jpg",
             "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM3_REDUCED.jpg",
         ]
+        # camera_paths = [
+        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM1/CAM1_1774424054126.jpg",
+        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM2/CAM2_1773298529500.jpg",
+        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM3/CAM3_1774424056125.jpg",
+        # ]
         
         cameras = []
         for i, path in enumerate(camera_paths, start=1):
@@ -220,61 +225,6 @@ def fetch_history_data(request):
         "data": results,
         "vehicle_number": vehicle_number,
         "vendor_name": vendor_name,
-    })
-
-@csrf_exempt
-def check_for_vehicle(request):
-    status = "new"
-    vehicle_number = ""
-    vendor_name = ""
-    rfid_value = ""
-
-    current_vehicle = VEHICLE_LOGS.objects.filter(status="IN_PROGRESS").first()
-
-    if current_vehicle:
-        rfids = (current_vehicle.rfids or "").split("|")
-
-        for rfid in rfids:
-            rfid_value = rfid
-            vehicle = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
-
-            if vehicle:
-                vendor = VENDOR_MASTER.objects.filter(
-                    vendor_code=vehicle.vendor_code
-                ).first()
-
-                status = "present"
-                vehicle_number = vehicle.vehicle_number
-                vendor_name = vendor.vendor_name if vendor else ""
-                break
-
-    else:
-        current_vehicle = VEHICLE_LOGS.objects.order_by("-create_time").first()
-        status = "present"
-        vehicle_number = "NOT_FOUND"
-        vendor_name = "NOT_FOUND"
-
-        if current_vehicle:
-            rfids = (current_vehicle.rfids or "").split("|")
-
-            for rfid in rfids:
-                vehicle = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
-
-                if vehicle:
-                    vendor = VENDOR_MASTER.objects.filter(
-                        vendor_code=vehicle.vendor_code
-                    ).first()
-
-                    status = "present"
-                    vehicle_number = vehicle.vehicle_number if vehicle else "NOT_FOUND"
-                    vendor_name = vendor.vendor_name if vendor else "NOT_FOUND"
-                    break
-
-    return JsonResponse({
-        "status": status,
-        "vehicle_number": vehicle_number,
-        "vendor_name": vendor_name,
-        "rfid": rfid_value,
     })
 
 @csrf_exempt

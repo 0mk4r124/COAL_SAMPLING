@@ -531,26 +531,6 @@ document.getElementById("imageModal")
         });
 });
 
-function checkVehicle() {
-    fetch('/api/check_for_vehicle/')
-        .then(response => response.json())
-        .then(data => {
-
-            if (data.status === 'new' && !modalOpen) {
-                document.getElementById('rfidInput').value = data.rfid || "";
-                vehicleModal.show();
-                modalOpen = true;
-            }
-
-            if (data.status === 'present') {
-                document.getElementById('vendorName').textContent = data.vendor_name;
-                document.getElementById('vehicleNumber').textContent = data.vehicle_number;
-            }
-
-        })
-        .catch(err => console.error("Vehicle check failed:", err));
-}
-
 function updateSystemStatus() {
     const cameraContainer = document.getElementById('camera-indicators');
     const locationContainer = document.getElementById('location-dots');
@@ -639,14 +619,10 @@ function updateCameraImages() {
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
     fetchSystemStatus();
-    
-    // Update system health status every 10 seconds
-    setInterval(fetchSystemStatus, 10000);
+    updateCurrentStatus(); // Initial check
     
     // Update current state and emergency/auto_manual status every 2 seconds
-    updateCurrentStatus(); // Initial check
+    setInterval(fetchSystemStatus, 10000);
     setInterval(updateCurrentStatus, 5000);
-
-    setInterval(checkVehicle, 5000);
     setInterval(updateCameraImages, 5000);
 });
