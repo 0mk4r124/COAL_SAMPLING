@@ -18,8 +18,8 @@ SERVICES = {
     "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_BARRIER.py",
     "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_SAMPLER.py",
     "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
-    "Video Streamer": fr"{BASE_FILE_PATH}SCRIPTS\\VIDEO_STREAMER.py",
-    "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
+    # "Video Streamer": fr"{BASE_FILE_PATH}SCRIPTS\\VIDEO_STREAMER.py",
+    # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
     "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
 }
