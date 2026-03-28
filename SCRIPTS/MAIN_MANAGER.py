@@ -27,10 +27,10 @@ DB_NAME = "COAL_SAMPLING_DHAR"
 DB_POLL_SEC     = 10
 DB_WAIT_TIMEOUT = 900
 TOTAL_CYCLES    = 3
-HOME_POSITION_TIMEOUT = 120
-SAMPLE_CYCLE_TIMEOUT = 240
-POSITION_CONFIRMATION_TIMEOUT = 240
-CLOSE_CYCLE_WAIT_TIME = 180
+HOME_POSITION_TIMEOUT = 600
+SAMPLE_CYCLE_TIMEOUT = 600
+POSITION_CONFIRMATION_TIMEOUT = 600
+CLOSE_CYCLE_WAIT_TIME = 600
 
 TEMP_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
 RESULT_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RESULT/"
@@ -297,7 +297,7 @@ def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual:
     finally:
         if db: db.close()
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ------------------------------------------------------------------------------
 class Manager:
 
     HANDLERS = {
@@ -439,7 +439,7 @@ class Manager:
             print(f"[MANAGER] Starting 5-loop auger position confirmation (Target Area: {target_area})")
             
             # ─── Loop 1: Original Position ─────────────────────────────────────────
-            print("\n[MANAGER] ═══ Loop 1/5: Original Position ═══")
+            print("\n[MANAGER] --- Loop 1/5: Original Position ---")
             images = self._capture_images_for_confirmation(1, "original")
             if images:
                 result = confirm_auger_position(images[0], images[1], target_area)
@@ -450,7 +450,7 @@ class Manager:
                 confirmations.append(False)
             
             # ─── Loop 2: Move Right ────────────────────────────────────────────────
-            print("\n[MANAGER] ═══ Loop 2/5: Move Right ═══")
+            print("\n[MANAGER] --- Loop 2/5: Move Right ---")
             print(f"[MANAGER] Moving Y-axis right for {MOVEMENT_DURATION}s…")
             self._sampler(action="move_y_right", duration=MOVEMENT_DURATION)
             time.sleep(MOVEMENT_DURATION + 3)  # Wait for movement to complete
@@ -468,7 +468,7 @@ class Manager:
             time.sleep(MOVEMENT_DURATION + 3)
             
             # ─── Loop 3: Move Left ─────────────────────────────────────────────────
-            print("\n[MANAGER] ═══ Loop 3/5: Move Left ═══")
+            print("\n[MANAGER] --- Loop 3/5: Move Left ---")
             print(f"[MANAGER] Moving Y-axis left for {MOVEMENT_DURATION}s…")
             self._sampler(action="move_y_left", duration=MOVEMENT_DURATION)
             time.sleep(MOVEMENT_DURATION + 3)
@@ -486,7 +486,7 @@ class Manager:
             time.sleep(MOVEMENT_DURATION + 3)
             
             # ─── Loop 4: Move Forward ──────────────────────────────────────────────
-            print("\n[MANAGER] ═══ Loop 4/5: Move Forward ═══")
+            print("\n[MANAGER] --- Loop 4/5: Move Forward ---")
             print(f"[MANAGER] Moving X-axis forward for {MOVEMENT_DURATION}s…")
             self._sampler(action="move_x_forward", duration=MOVEMENT_DURATION)
             time.sleep(MOVEMENT_DURATION + 3)
@@ -504,7 +504,7 @@ class Manager:
             time.sleep(MOVEMENT_DURATION + 1)
             
             # ─── Loop 5: Move Reverse ──────────────────────────────────────────────
-            print("\n[MANAGER] ═══ Loop 5/5: Move Reverse ═══")
+            print("\n[MANAGER] --- Loop 5/5: Move Reverse ---")
             print(f"[MANAGER] Moving X-axis reverse for {MOVEMENT_DURATION}s…")
             self._sampler(action="move_x_reverse", duration=MOVEMENT_DURATION)
             time.sleep(MOVEMENT_DURATION + 1)
@@ -526,14 +526,13 @@ class Manager:
             passed = sum(confirmations)
             total = len(confirmations)
             
-            print(f"\n[MANAGER] ╔════ AUGER POSITION CONFIRMATION SUMMARY ════╗")
-            print(f"[MANAGER] ║ Loop 1 (Original): {'PASS' if confirmations[0] else 'FAIL':<28} ║")
-            print(f"[MANAGER] ║ Loop 2 (Right):    {'PASS' if confirmations[1] else 'FAIL':<28} ║")
-            print(f"[MANAGER] ║ Loop 3 (Left):     {'PASS' if confirmations[2] else 'FAIL':<28} ║")
-            print(f"[MANAGER] ║ Loop 4 (Forward):  {'PASS' if confirmations[3] else 'FAIL':<28} ║")
-            print(f"[MANAGER] ║ Loop 5 (Reverse):  {'PASS' if confirmations[4] else 'FAIL':<28} ║")
-            print(f"[MANAGER] ║ Total: {passed}/{total} confirmations passed                ║")
-            print(f"[MANAGER] ╚═════════════════════════════════════════════╝")
+            print(f"\n[MANAGER] | AUGER POSITION CONFIRMATION SUMMARY ")
+            print(f"[MANAGER] Loop 1 (Original): {'PASS' if confirmations[0] else 'FAIL':<28} ")
+            print(f"[MANAGER] Loop 2 (Right):    {'PASS' if confirmations[1] else 'FAIL':<28} ")
+            print(f"[MANAGER] Loop 3 (Left):     {'PASS' if confirmations[2] else 'FAIL':<28} ")
+            print(f"[MANAGER] Loop 4 (Forward):  {'PASS' if confirmations[3] else 'FAIL':<28} ")
+            print(f"[MANAGER] Loop 5 (Reverse):  {'PASS' if confirmations[4] else 'FAIL':<28} ")
+            print(f"[MANAGER] Total: {passed}/{total} confirmations passed                ")
             
             # Return True only if ALL 5 loops pass
             final_result = all(confirmations)
@@ -778,6 +777,8 @@ class Manager:
 
             cycle_num = self._successful_cycles + 1
             self.cycle = cycle_num
+            self._sampler(action="start_cycle", cycle=cycle_num)
+            print("[MANAGER] CYCLE START GIVEN !!!")
             self._sampler(action="start_cycle", cycle=cycle_num)
             self._goto(State.CYCLE_CAPTURE)
             return

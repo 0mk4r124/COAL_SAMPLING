@@ -294,11 +294,26 @@ class SamplerController:
 
         try:
             print(f"[PLC_SAMPLER] Starting sampling cycle {cycle}")
+            time.sleep(1)
 
             self.plc.writeIntToPLC(self.client, CYCLE_START, 1)
             time.sleep(1)
+            self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+            print(f"[PLC_SAMPLER] Waiting until FB 1")
+            while True:
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+                return_read = self.plc.readIntFromPLC(self.client, CYCLE_START, DB_READ_NUMBER=DB_WRITE)
+                print(f"[PLC_SAMPLER] return_read -- {return_read}")
+                if (return_read == 1) or (return_read == "1"): break
+                else:self.plc.writeIntToPLC(self.client, CYCLE_START, 1)
+                time.sleep(0.5)
+                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                time.sleep(0.5)
+
+            time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, CYCLE_START, 0)
-            # self.stop_cycle()
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
             print(f"[PLC_SAMPLER] Cycle {cycle} initiated.")
 
         except Exception as e:
