@@ -446,6 +446,7 @@ class SamplerController:
                     elif action == "start_cycle":
                         cycle = data.get("cycle", 1)
                         self.start_cycle(cycle)
+                        self.mqtt.publish(TOPIC_OUT, {"status": "cycle_start_given"})
                     elif action == "sample_cycle":
                         if self.move_home():
                             x = data.get("x", 0)

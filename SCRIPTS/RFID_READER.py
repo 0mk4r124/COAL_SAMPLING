@@ -11,6 +11,9 @@ BUFFER_SIZE = 1024
 DEBOUNCE_WINDOW_SEC = 5.0
 TOPIC_OUT = "manager/rfid"
 
+ig_rfids = ["C80700000000000001F8"]
+# ig_rfids = []
+
 def main():
     mq = MQTT("RFID_READER")
 
@@ -36,7 +39,7 @@ def main():
                     rfid = data.decode(errors="ignore").strip()
                     rfid = str(rfid)[1:]
 
-                    if len(rfid)<30:
+                    if len(rfid)<30 and rfid not in ig_rfids:
 
                         print(f"[RFID_READER] Tag raw={raw}  decoded={rfid!r}")
 

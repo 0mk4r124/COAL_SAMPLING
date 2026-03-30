@@ -798,18 +798,19 @@ class Manager:
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
 
-        self._sampler(action="check_sample_cycle_complete") 
+        if msg and msg.get("status") == "cycle_start_given":
+            print("[MANAGER] Cycle start given and recieved !!")
+            self._sampler(action="check_sample_cycle_complete")
+            self._goto(State.CYCLE_DONE)
+            return
+
         self._goto(State.CYCLE_DONE)
 
     def _handle_cycle_done(self):
         """Wait for sampling cycle completion"""
+
         msg = self._pop("plc_sampler/status")
-        
-        if not msg:
-            return
-        
         status = msg.get("status", "")
-        
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
             self._emergency_return_state = State.AUGER_HOME_POS
