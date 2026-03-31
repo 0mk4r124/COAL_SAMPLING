@@ -1,8 +1,13 @@
 import cv2
 import os
 import qrcode
+import traceback
 from datetime import datetime
 from DEPENDANT.INFERENCE import MASKRCNN
+from LOGGING_CONFIG import initializeLogger
+
+# Initialize logger
+logger = initializeLogger("LOGIC")
 
 # AI Model Initialization 
 BASE_DIR = 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/'
@@ -29,10 +34,11 @@ def initialize_ai_model():
             CLASS_JSON,
             debugMode=False
         )
-        print("[LOGIC] AI Model initialized successfully")
+        logger.info("AI Model initialized successfully")
         return True
     except Exception as e:
-        print(f"[LOGIC] AI Model initialization failed: {e}")
+        logger.error(f"AI Model initialization failed: {e}", exc_info=True)
+        print(f"ERROR: AI Model initialization failed: {e}")
         return False
 
 def check_vehicle_front_present(image) -> bool:
@@ -43,20 +49,21 @@ def check_vehicle_front_present(image) -> bool:
     """
     try:
         if _inference_model is None:
-            print("[LOGIC] AI Model not initialized")
+            logger.warning("AI Model not initialized")
             return False
         
         _, labellist = _inference_model.run_inference(image)
         
         # Check if any vehicle-related objects detected
         if labellist and len(labellist) > 0:
-            print(f"[LOGIC] Vehicle detected: {len(labellist)} objects found")
+            logger.info(f"Vehicle detected: {len(labellist)} objects found")
             return True
         
-        print("[LOGIC] No vehicle detected in image")
+        logger.debug("No vehicle detected in image")
         return False
     except Exception as e:
-        print(f"[LOGIC] Error checking vehicle front: {e}")
+        logger.error(f"Error checking vehicle front: {e}", exc_info=True)
+        print(f"ERROR: Error checking vehicle front: {e}")
         return False
 
 def confirm_barrier_opening(image) -> bool:
@@ -66,19 +73,20 @@ def confirm_barrier_opening(image) -> bool:
     """
     try:
         if _inference_model is None:
-            print("[LOGIC] AI Model not initialized")
+            logger.warning("AI Model not initialized")
             return False
         
         _, labellist = _inference_model.run_inference(image)
         
         # Check if barrier opening detected
         if labellist and len(labellist) > 0:
-            print(f"[LOGIC] Barrier opening confirmed by AI")
+            logger.info("Barrier opening confirmed by AI")
             return True
         
         return False
     except Exception as e:
-        print(f"[LOGIC] Error confirming barrier opening: {e}")
+        logger.error(f"Error confirming barrier opening: {e}", exc_info=True)
+        print(f"ERROR: Error confirming barrier opening: {e}")
         return False
 
 def confirm_barrier_closing(image) -> bool:
@@ -88,19 +96,20 @@ def confirm_barrier_closing(image) -> bool:
     """
     try:
         if _inference_model is None:
-            print("[LOGIC] AI Model not initialized")
+            logger.warning("AI Model not initialized")
             return False
         
         _, labellist = _inference_model.run_inference(image)
         
         # Check if barrier closing detected (barrier should be at closed position)
         if labellist and len(labellist) > 0:
-            print(f"[LOGIC] Barrier closing confirmed by AI")
+            logger.info("Barrier closing confirmed by AI")
             return True
         
         return False
     except Exception as e:
-        print(f"[LOGIC] Error confirming barrier closing: {e}")
+        logger.error(f"Error confirming barrier closing: {e}", exc_info=True)
+        print(f"ERROR: Error confirming barrier closing: {e}")
         return False
 
 def confirm_auger_position(cam1_image_path: str, cam2_image_path: str, target_area: int) -> bool:
@@ -134,30 +143,31 @@ def confirm_auger_position(cam1_image_path: str, cam2_image_path: str, target_ar
     """
     try:
         if _inference_model is None:
-            print("[LOGIC] AI Model not initialized for auger position confirmation")
+            logger.warning("AI Model not initialized for auger position confirmation")
             return False
         
         # ─── CAM1 Validation ──────────────────────────────────────────────────────
-        print(f"[LOGIC] CAM1 Check: Validating bottom-middle region has only COAL...")
+        logger.info("CAM1 Check: Validating bottom-middle region has only COAL...")
         cam1_position = _validate_cam1_region(cam1_image_path)
-        print(f"[LOGIC] CAM1 Position Valid: {cam1_position}")
+        logger.info(f"CAM1 Position Valid: {cam1_position}")
         
         # ─── CAM2 Validation ──────────────────────────────────────────────────────
-        print(f"[LOGIC] CAM2 Check: Validating AUGER_BOTTOM in target coal area...")
+        logger.info("CAM2 Check: Validating AUGER_BOTTOM in target coal area...")
         cam2_position = _validate_cam2_auger(cam2_image_path, target_area)
-        print(f"[LOGIC] CAM2 Position Valid: {cam2_position}")
+        logger.info(f"CAM2 Position Valid: {cam2_position}")
         
         # ─── Final Result ──────────────────────────────────────────────────────────
         result = cam1_position and cam2_position
         if result:
-            print(f"[LOGIC] AUGER POSITIONING CONFIRMED - Both CAM1 and CAM2 validations passed")
+            logger.info(f"AUGER POSITIONING CONFIRMED - Both CAM1 and CAM2 validations passed")
         else:
-            print(f"[LOGIC] AUGER POSITIONING FAILED - CAM1={cam1_position}, CAM2={cam2_position}")
+            logger.warning(f"AUGER POSITIONING FAILED - CAM1={cam1_position}, CAM2={cam2_position}")
         
         return result
     
     except Exception as e:
-        print(f"[LOGIC] Error in auger position confirmation: {e}")
+        logger.error(f"Error in auger position confirmation: {e}", exc_info=True)
+        print(f"ERROR: Error in auger position confirmation: {e}")
         return False
 
 def _validate_cam1_region(image_path: str) -> bool:
@@ -181,12 +191,13 @@ def _validate_cam1_region(image_path: str) -> bool:
     try:
         image = cv2.imread(image_path)
         if image is None:
-            print(f"[LOGIC] Failed to read CAM1 image: {image_path}")
+            logger.error(f"Failed to read CAM1 image: {image_path}", exc_info=True)
+            print(f"ERROR: Failed to read CAM1 image: {image_path}")
             return False
         
         vis_img = image.copy()
         height, width = image.shape[:2]
-        print(f"[LOGIC] CAM1 Image dimensions: {width}x{height}")
+        logger.debug(f"CAM1 Image dimensions: {width}x{height}")
         
         # Define bottom-middle region bounds (region of interest for auger placement)
         x_start = int(width * 0.35)      # 35% from left
@@ -197,15 +208,15 @@ def _validate_cam1_region(image_path: str) -> bool:
         region_width = x_end - x_start
         region_height = y_end - y_start
         
-        print(f"[LOGIC] CAM1: Region of interest x=[{x_start}-{x_end}], y=[{y_start}-{y_end}]")
-        print(f"[LOGIC] CAM1: Region size: {region_width}x{region_height}")
+        logger.debug(f"CAM1: Region of interest x=[{x_start}-{x_end}], y=[{y_start}-{y_end}]")
+        logger.debug(f"CAM1: Region size: {region_width}x{region_height}")
         cv2.rectangle(vis_img, (x_start, y_start), (x_end, y_end), (0, 255, 255), 3)
         
         # Run inference on full image
         masked_img, labellist = _inference_model.run_inference(image)
         
         if not labellist:
-            print("[LOGIC] CAM1: No objects detected - region is clear")
+            logger.info("CAM1: No objects detected - region is clear")
             cv2.imwrite("test.jpg", vis_img)
             return True
         
@@ -244,32 +255,31 @@ def _validate_cam1_region(image_path: str) -> bool:
                     # Draw in green for allowed objects
                     cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
                     has_coal_or_truck = True
-                    print(f"[LOGIC] CAM1: ALLOWED '{class_name}' overlaps region - area: {overlap_area}px (confidence: {score:.2f})")
+                    logger.debug(f"CAM1: ALLOWED '{class_name}' overlaps region - area: {overlap_area}px (confidence: {score:.2f})")
                 else:
                     # Draw in red for forbidden objects
                     cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
                     has_forbidden_objects = True
                     forbidden_objects_in_region.append((class_name, score, overlap_area))
-                    print(f"[LOGIC] CAM1: FORBIDDEN '{class_name}' overlaps region - area: {overlap_area}px (confidence: {score:.2f})")
+                    logger.warning(f"CAM1: FORBIDDEN '{class_name}' overlaps region - area: {overlap_area}px (confidence: {score:.2f})")
             else:
                 # Object detected but doesn't overlap region - draw in cyan
                 cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 255, 0), 1)
-                print(f"[LOGIC] CAM1: '{class_name}' detected but outside region (confidence: {score:.2f})")
+                logger.debug(f"CAM1: '{class_name}' detected but outside region (confidence: {score:.2f})")
         
         cv2.imwrite("test.jpg", vis_img)
         
         # Result: Pass only if NO forbidden objects overlap the region
         if has_forbidden_objects:
-            print(f"[LOGIC] CAM1: VALIDATION FAILED - Forbidden objects in region: {forbidden_objects_in_region}")
+            logger.warning(f"CAM1: VALIDATION FAILED - Forbidden objects in region: {forbidden_objects_in_region}")
             return False
         else:
-            print(f"[LOGIC] CAM1: VALIDATION PASSED - Region contains only allowed objects or is clear")
+            logger.info(f"CAM1: VALIDATION PASSED - Region contains only allowed objects or is clear")
             return True
     
     except Exception as e:
-        print(f"[LOGIC] Error in CAM1 validation: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in CAM1 validation: {e}", exc_info=True)
+        print(f"ERROR: Error in CAM1 validation: {e}")
         return False
 
 def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
@@ -284,19 +294,20 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
     try:
         image = cv2.imread(image_path)
         if image is None:
-            print(f"[LOGIC] Failed to read CAM2 image: {image_path}")
+            logger.error(f"Failed to read CAM2 image: {image_path}", exc_info=True)
+            print(f"ERROR: Failed to read CAM2 image: {image_path}")
             return False
         
         vis_img = image.copy()
         height, width = image.shape[:2]
-        print(f"[LOGIC] CAM2 Image dimensions: {width}x{height}")
+        logger.debug(f"CAM2 Image dimensions: {width}x{height}")
         
         # Run inference
         masked_img, labellist = _inference_model.run_inference(image)
         cv2.imwrite("masked_img.jpg", masked_img)
         
         if not labellist:
-            print("[LOGIC] CAM2: No objects detected")
+            logger.info("CAM2: No objects detected")
             return False
         
         # Map target area number to label name
@@ -328,11 +339,11 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
             
             if class_name == "AUGER_BOTTOM":
                 auger_bottom_detection = detection
-                print(f"[LOGIC] CAM2: AUGER_BOTTOM detected (bbox: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
+                logger.debug(f"CAM2: AUGER_BOTTOM detected (bbox: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
             
             elif class_name == "AUGER":
                 auger_detection = detection
-                print(f"[LOGIC] CAM2: AUGER detected (bbox: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
+                logger.debug(f"CAM2: AUGER detected (bbox: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
             
             elif class_name == target_coal_label:
                 coal_area_bbox = {
@@ -341,11 +352,11 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
                     'score': score
                 }
                 cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-                print(f"[LOGIC] CAM2: Target {target_coal_label} at x=[{x_min}-{x_max}], y=[{y_min}-{y_max}] (confidence: {score:.2f})")
+                logger.debug(f"CAM2: Target {target_coal_label} at x=[{x_min}-{x_max}], y=[{y_min}-{y_max}] (confidence: {score:.2f})")
         
         # Validate that target coal area is detected
         if coal_area_bbox is None:
-            print(f"[LOGIC] CAM2: Target coal area {target_coal_label} not detected")
+            logger.warning(f"CAM2: Target coal area {target_coal_label} not detected")
             return False
         
         # ─── Determine Reference Point ─────────────────────────────────────────
@@ -362,16 +373,17 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
                 reference_point = (int(bottom_point[0]), int(bottom_point[1]))
                 reference_source = "AUGER_BOTTOM mask"
                 
-                print(f"[LOGIC] CAM2: Using AUGER_BOTTOM lowest mask point as reference: {reference_point}")
+                logger.debug(f"CAM2: Using AUGER_BOTTOM lowest mask point as reference: {reference_point}")
                 cv2.circle(vis_img, reference_point, 8, (0, 0, 255), -1)
             else:
-                print("[LOGIC] CAM2: AUGER_BOTTOM detected but has no mask points - falling back to AUGER")
+                logger.debug("CAM2: AUGER_BOTTOM detected but has no mask points - falling back to AUGER")
                 auger_bottom_detection = None
         
         # Fallback: If AUGER_BOTTOM unavailable, use center of AUGER bottom edge
         if reference_point is None:
             if auger_detection is None:
-                print("[LOGIC] CAM2: Neither AUGER_BOTTOM nor AUGER detected")
+                logger.error("CAM2: Neither AUGER_BOTTOM nor AUGER detected", exc_info=True)
+                print(f"ERROR: CAM2: Neither AUGER_BOTTOM nor AUGER detected")
                 return False
             
             # Extract AUGER bounding box
@@ -386,7 +398,7 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
             reference_point = (center_x, bottom_y)
             reference_source = "AUGER bottom edge center"
             
-            print(f"[LOGIC] CAM2: AUGER_BOTTOM not available - Using {reference_source} as reference: {reference_point}")
+            logger.debug(f"CAM2: AUGER_BOTTOM not available - Using {reference_source} as reference: {reference_point}")
             cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
             cv2.circle(vis_img, reference_point, 8, (255, 165, 0), -1)
         
@@ -406,22 +418,21 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
         
         result = inside_x and inside_y
         
-        print(f"[LOGIC] CAM2: Reference point ({ref_x}, {ref_y}) from {reference_source}")
-        print(f"[LOGIC] CAM2: COAL_AREA bounds x=[{coal_x_min}-{coal_x_max}], y=[{coal_y_min}-{coal_y_max}]")
-        print(f"[LOGIC] CAM2: X alignment: {inside_x} (ref_x={ref_x} in range [{coal_x_min}-{coal_x_max}])")
-        print(f"[LOGIC] CAM2: Y alignment: {inside_y} (ref_y={ref_y} in range [{coal_y_min}-{coal_y_max}])")
+        logger.debug(f"CAM2: Reference point ({ref_x}, {ref_y}) from {reference_source}")
+        logger.debug(f"CAM2: COAL_AREA bounds x=[{coal_x_min}-{coal_x_max}], y=[{coal_y_min}-{coal_y_max}]")
+        logger.debug(f"CAM2: X alignment: {inside_x} (ref_x={ref_x} in range [{coal_x_min}-{coal_x_max}])")
+        logger.debug(f"CAM2: Y alignment: {inside_y} (ref_y={ref_y} in range [{coal_y_min}-{coal_y_max}])")
         
         if result:
-            print(f"[LOGIC] CAM2: AUGER is positioned correctly inside {target_coal_label}")
+            logger.info(f"CAM2: AUGER is positioned correctly inside {target_coal_label}")
         else:
-            print(f"[LOGIC] CAM2: AUGER is NOT positioned correctly inside {target_coal_label}")
+            logger.warning(f"CAM2: AUGER is NOT positioned correctly inside {target_coal_label}")
         
         return result
     
     except Exception as e:
-        print(f"[LOGIC] Error in CAM2 validation: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in CAM2 validation: {e}", exc_info=True)
+        print(f"ERROR: Error in CAM2 validation: {e}")
         return False
 
 def check_sampling_cycle_completion(image) -> bool:
@@ -431,19 +442,20 @@ def check_sampling_cycle_completion(image) -> bool:
     """
     try:
         if _inference_model is None:
-            print("[LOGIC] AI Model not initialized")
+            logger.warning("AI Model not initialized")
             return False
         
         _, labellist = _inference_model.run_inference(image)
         
         # Check if sampling action completed
         if labellist and len(labellist) > 0:
-            print(f"[LOGIC] Sampling cycle completion confirmed")
+            logger.info("Sampling cycle completion confirmed")
             return True
         
         return False
     except Exception as e:
-        print(f"[LOGIC] Error checking sampling cycle completion: {e}")
+        logger.error(f"Error checking sampling cycle completion: {e}", exc_info=True)
+        print(f"ERROR: Error checking sampling cycle completion: {e}")
         return False
 
 def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path: str) -> str:
@@ -464,15 +476,17 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         os.makedirs(save_path, exist_ok=True)
         qr_img.save(save_path)
         
-        print(f"[LOGIC] QR code generated: {save_path}")
+        logger.info(f"QR code generated: {save_path}")
         return save_path
     except Exception as e:
-        print(f"[LOGIC] Error generating QR code: {e}")
+        logger.error(f"Error generating QR code: {e}", exc_info=True)
+        print(f"ERROR: Error generating QR code: {e}")
         return ""
 
 if __name__ == "__main__":
     # Test initialization
     if initialize_ai_model():
-        print("AI Model ready for use")
+        logger.info("AI Model ready for use")
     else:
-        print("Failed to initialize AI Model")
+        logger.error("Failed to initialize AI Model", exc_info=True)
+        print("ERROR: Failed to initialize AI Model")

@@ -1,9 +1,14 @@
 import socket
 import time
 import uuid
+import traceback
 from datetime import datetime
 
 from DEPENDANT.MQTT import MQTT
+from LOGGING_CONFIG import initializeLogger
+
+# Initialize logger
+logger = initializeLogger("RFID_READER")
 
 TCP_IP = "192.168.1.200"
 TCP_PORT = 100
@@ -23,12 +28,12 @@ def main():
     last_seen = time.time()
     rfids = set()
 
-    print(f"[RFID_READER] Connecting to RFID reader at {TCP_IP}:{TCP_PORT}")
+    logger.info(f"Connecting to RFID reader at {TCP_IP}:{TCP_PORT}")
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(1.0)
         s.connect((TCP_IP, TCP_PORT))
-        print("[RFID_READER] TCP connected.")
+        logger.info("TCP connected.")
 
         while True:
 
@@ -41,14 +46,14 @@ def main():
 
                     if len(rfid)<30 and rfid not in ig_rfids:
 
-                        print(f"[RFID_READER] Tag raw={raw}  decoded={rfid!r}")
+                        logger.debug(f"Tag raw={raw}  decoded={rfid!r}")
 
                         if not session_active:
                             session_uid   = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
                             last_seen = time.time()
                             session_active = True
                             rfids = set()
-                            print(f"[RFID_READER] Session started: {session_uid}")
+                            logger.info(f"Session started: {session_uid}")
 
                         if rfid not in rfids:
                             last_seen = time.time() 
@@ -56,7 +61,8 @@ def main():
 
             except socket.timeout: pass
             except Exception as e:
-                print(f"[RFID_READER] Recv error: {e}")
+                logger.error(f"Recv error: {e}", exc_info=True)
+                print(f"ERROR: Recv error: {e}")
                 time.sleep(1)
 
             if session_active and last_seen is not None:
@@ -68,7 +74,7 @@ def main():
                         "timestamp" : datetime.now().isoformat(),
                     }
                     mq.publish(TOPIC_OUT, payload)
-                    print(f"[RFID_READER] Published {TOPIC_OUT}: {payload}")
+                    logger.info(f"Published {TOPIC_OUT}: {payload}")
 
                     # reset
                     session_active = False

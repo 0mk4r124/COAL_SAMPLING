@@ -3,10 +3,16 @@ import time
 import random
 import threading
 import pymysql
+import traceback
 from datetime import datetime
 from enum import Enum, auto
 
 from DEPENDANT.MQTT import MQTT
+from LOGGING_CONFIG import initializeLogger
+
+# Initialize logger
+logger = initializeLogger("MAIN_MANAGER")
+
 from LOGIC import (
     initialize_ai_model,
     check_vehicle_front_present,

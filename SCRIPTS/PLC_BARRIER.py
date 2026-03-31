@@ -1,8 +1,12 @@
 import time
+import traceback
 
 from DEPENDANT.SNAP7 import PLCCOMMINCATION
 from DEPENDANT.MQTT  import MQTT
+from LOGGING_CONFIG import initializeLogger
 
+# Initialize logger
+logger = initializeLogger("PLC_BARRIER")
 
 PLC_IP   = "192.168.1.2"        
 DB_READ  = 10
