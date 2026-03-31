@@ -9,6 +9,7 @@ let modalOpen = false;
 
 // State management variables
 let currentUID = null;
+let vehicleDetailsModalOpen = false;
 let emergencyModalOpen = false;
 let autoManualModalOpen = false;
 let statusCheckInterval = null;
@@ -45,6 +46,17 @@ function updateCurrentStatus() {
         .then(response => response.json())
         .then(data => {
             // Update state display
+            if (data.add_vehicle === "YES" && !vehicleDetailsModalOpen){
+                const input = document.getElementById('rfidInput');
+                input.value = data.rfids || 'Dummy';
+                input.disabled = true;
+                vehicleDetailsModalOpen = true;
+                const vehicleDetailsModal = new bootstrap.Modal(document.getElementById('vehicleDetailsModal'));
+                vehicleDetailsModal.show();
+            }
+            if (data.current_state === "SET_BUCKET"){
+                vehicleDetailsModalOpen = false;
+            }
             document.getElementById('currentState').textContent = data.current_state || 'IDLE';
             document.getElementById('dashVendorName').textContent = data.vendor_name || 'NOT FOUND';
             document.getElementById('dashVehicleNumber').textContent = data.vehicle_number || 'NOT FOUND';
@@ -625,5 +637,5 @@ document.addEventListener('DOMContentLoaded', function() {
     // Update current state and emergency/auto_manual status every 2 seconds
     setInterval(fetchSystemStatus, 10000);
     setInterval(updateCurrentStatus, 5000);
-    setInterval(updateCameraImages, 5000);
+    setInterval(updateCameraImages, 2000);
 });

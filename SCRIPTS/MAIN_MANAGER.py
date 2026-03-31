@@ -25,12 +25,12 @@ DB_NAME = "COAL_SAMPLING_DHAR"
 
 # ── Tuning ────────────────────────────────────────────────────────────────────
 DB_POLL_SEC     = 10
-DB_WAIT_TIMEOUT = 900
+DB_WAIT_TIMEOUT = 300
 TOTAL_CYCLES    = 3
 HOME_POSITION_TIMEOUT = 600
 SAMPLE_CYCLE_TIMEOUT = 600
-POSITION_CONFIRMATION_TIMEOUT = 600
-CLOSE_CYCLE_WAIT_TIME = 600
+POSITION_CONFIRMATION_TIMEOUT = 120
+CLOSE_CYCLE_WAIT_TIME = 120
 
 TEMP_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
 RESULT_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RESULT/"
@@ -51,8 +51,8 @@ def get_sample_positions(used_areas=None):
     area = random.choice(available_areas)
 
     # Global bounds
-    x_min, x_max = 15, 85
-    y_min, y_max = 30, 70
+    x_min, x_max = 50, 100
+    y_min, y_max = 40, 70
 
     # Grid split
     x_splits = 3
@@ -284,7 +284,7 @@ def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual:
             """
             UPDATE PLC_COMM
                SET STATE = %s, EMERGENCY = %s, AUTO_MANUAL = %s, UPDATED = %s
-             WHERE UID = %s
+            WHERE UID = %s
             """,
             (state, emergency, auto_manual, now, uid)
         )
@@ -810,7 +810,6 @@ class Manager:
         """Wait for sampling cycle completion"""
 
         msg = self._pop("plc_sampler/status")
-        status = msg.get("status", "")
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
             self._emergency_return_state = State.AUGER_HOME_POS
@@ -818,7 +817,7 @@ class Manager:
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
         
-        if status == "sample_cycle_complete":
+        if msg and msg.get("status", "") == "sample_cycle_complete":
             print(f"[MANAGER] Cycle {self.cycle} completed")
             # TODO: AI verification of successful sample
             self._successful_cycles += 1
@@ -826,7 +825,7 @@ class Manager:
             
             if self._successful_cycles >= TOTAL_CYCLES:
                 print(f"[MANAGER] All {TOTAL_CYCLES} successful cycles completed.")
-                time.sleep(100)  # Ensure PLC has time to update status
+                time.sleep(30)  # Ensure PLC has time to update status
                 self._sampler(action="check_all_samples_status")
                 self._goto(State.SAMPLE_COLLECTION)
             else:
@@ -834,7 +833,7 @@ class Manager:
                 print(f"[MANAGER] Moving to next sampling position …")
                 self._goto(State.CYCLE_POSITION)
 
-        elif status == "cycle_error":
+        elif msg and msg.get("status", "") == "cycle_error":
             print(f"[MANAGER] Cycle error: {msg.get('msg')}")
             print("[MANAGER] Retrying with different position …")
             self.positions.pop()
@@ -864,6 +863,7 @@ class Manager:
         elif msg and msg.get("status") == "all_samples_collected":
             now = time.time()
             while time.time() - now < CLOSE_CYCLE_WAIT_TIME:
+                time.sleep(10)
                 print("[MANAGER] Waiting for Cycle Stop.")
             self._sampler(action="sample_cycle_stop")
             self._goto(State.COMPLETE_FINAL)
@@ -882,15 +882,15 @@ class Manager:
         status = msg.get("status", "")
         # Emergency stop cleared - resume to CYCLE_CONFIRM and reset cycles
         if status == "emergency_cleared":
+            self._barrier(action="check_truck")
             print("[MANAGER] Emergency stop cleared. Resuming operation …")
             
             # Reset successful cycles and return to CYCLE_CONFIRM
             self._successful_cycles = 0
             self._current_sample_index = 0
             self.positions = []
-            state = self._emergency_return_state
             self._emergency_return_state = None
-            self._goto(state)
+            self._goto(State.VEHICLE_PLACEMENT)
 
     def _handle_complete_final(self):
         """Complete sampling — generate QR code and save logs"""

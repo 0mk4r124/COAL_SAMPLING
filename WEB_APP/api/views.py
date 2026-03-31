@@ -273,6 +273,7 @@ def get_current_status(request):
         
         if not current_vehicle:
             return JsonResponse({
+                "add_vehicle": "No",
                 "status": "idle",
                 "uid": None,
                 "vehicle_number": "NOT_FOUND",
@@ -288,6 +289,7 @@ def get_current_status(request):
         plc_comm = PLC_COMM.objects.filter(uid=current_vehicle.uid).first()
         
         # Get vehicle details
+        all_rfids = current_vehicle.rfids if current_vehicle.rfids else "Dummy"
         rfids = (current_vehicle.rfids or "").split("|")
         vehicle_number = "NOT_FOUND"
         vendor_name = "NOT_FOUND"
@@ -302,6 +304,7 @@ def get_current_status(request):
         
         if plc_comm:
             return JsonResponse({
+                "add_vehicle": "No",
                 "status": "in_progress",
                 "uid": current_vehicle.uid,
                 "vehicle_number": vehicle_number,
@@ -315,6 +318,8 @@ def get_current_status(request):
             })
         else:
             return JsonResponse({
+                "add_vehicle": "YES",
+                "rfids": all_rfids,
                 "status": "in_progress",
                 "uid": current_vehicle.uid,
                 "vehicle_number": vehicle_number,
@@ -329,7 +334,7 @@ def get_current_status(request):
     
     except Exception as e:
         print(f"Error in get_current_status: {e}")
-        return JsonResponse({"error": str(e)}, status=500)
+        return JsonResponse({"add_vehicle": "No", "error": str(e)}, status=500)
 
 
 @csrf_exempt

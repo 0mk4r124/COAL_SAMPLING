@@ -20,7 +20,7 @@ Z_DOWN_SENSOR_FB = 10
 EMERGENCY_STOP = 14
 AUTO_MANUAL = 16
 CYCLE_COMPLETE = 18
-CYCLE_STATUS = 0
+CYCLE_STATUS = 20
 
 # OUTPUT OFFSETS
 CYCLE_START = 0
@@ -61,7 +61,7 @@ class SamplerController:
     def check_sample_cycle_complete(self):
         sample_cycle_complete = 0
         try:
-            sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_STATUS, DB_READ_NUMBER=DB_READ_2)
+            sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_STATUS)
             
             print(sample_cycle_complete)
             time.sleep(1)

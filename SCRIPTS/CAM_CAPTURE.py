@@ -103,6 +103,7 @@ class CamController:
                     # Save full resolution
                     # save_frame(img, temp_full_path)
                     # Save 50% reduced resolution for quick loading
+                    if cam_name in ["CAM3", "CAM2"]: img = cv2.flip(img, 1)
                     save_frame_reduced(img, temp_reduced_path, scale=0.5)
                     
                     print(f"[CAM_CAPTURE] {cam_name} captured: full={temp_full_path}, reduced={temp_reduced_path}")
