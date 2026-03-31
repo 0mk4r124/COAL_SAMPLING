@@ -82,16 +82,16 @@ def serve_file(request):
 def live_ip_camera(request):
     """API endpoint for all 4 IP camera live images"""
     try: 
-        # camera_paths = [
-        #     "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM1_REDUCED.jpg",
-        #     "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM2_REDUCED.jpg",
-        #     "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM3_REDUCED.jpg",
-        # ]
         camera_paths = [
-            "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM1/CAM1_1774424054126.jpg",
-            "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM2/CAM2_1773298529500.jpg",
-            "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM3/CAM3_1774424056125.jpg",
+            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM1_REDUCED.jpg",
+            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM2_REDUCED.jpg",
+            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM3_REDUCED.jpg",
         ]
+        # camera_paths = [
+        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM1/CAM1_1774424054126.jpg",
+        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM2/CAM2_1773298529500.jpg",
+        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM3/CAM3_1774424056125.jpg",
+        # ]
         
         cameras = []
         for i, path in enumerate(camera_paths, start=1):
