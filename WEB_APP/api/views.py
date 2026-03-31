@@ -3,13 +3,13 @@ import os
 import shutil
 
 from django.contrib.auth.decorators import login_required
-from django.db.models import Max, Subquery, OuterRef, Value, DateTimeField
+from django.db.models import F, Func, Max, Subquery, OuterRef, Value, DateTimeField, CharField
 from django.http import JsonResponse, HttpResponse, FileResponse
 from django.utils.decorators import method_decorator
 from django.utils import timezone
 from django.views.generic import TemplateView
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models.functions import Greatest
+from django.db.models.functions import Greatest, Concat
 from django.utils.timezone import is_aware, make_naive, make_aware
 from django.contrib import messages
 
@@ -82,16 +82,16 @@ def serve_file(request):
 def live_ip_camera(request):
     """API endpoint for all 4 IP camera live images"""
     try: 
-        camera_paths = [
-            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM1_REDUCED.jpg",
-            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM2_REDUCED.jpg",
-            "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM3_REDUCED.jpg",
-        ]
         # camera_paths = [
-        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM1/CAM1_1774424054126.jpg",
-        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM2/CAM2_1773298529500.jpg",
-        #     "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM3/CAM3_1774424056125.jpg",
+        #     "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM1_REDUCED.jpg",
+        #     "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM2_REDUCED.jpg",
+        #     "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM3_REDUCED.jpg",
         # ]
+        camera_paths = [
+            "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM1/CAM1_1774424054126.jpg",
+            "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM2/CAM2_1773298529500.jpg",
+            "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/TEMP_IMG/CAM3/CAM3_1774424056125.jpg",
+        ]
         
         cameras = []
         for i, path in enumerate(camera_paths, start=1):
@@ -150,24 +150,37 @@ def add_vehicle(request):
         )
 
         # If vendor exists but name changed
-        if not created and vendor_name and vendor_obj.vendor_name != vendor_name:
-            vendor_obj.vendor_name = vendor_name
+        # Update only if explicitly provided (new vendor case)
+        if vendor_name:
+            if created:
+                vendor_obj.vendor_name = vendor_name
+                vendor_obj.bucket_no = bucketNo
+            else:
+                # Optional: update only if fields empty
+                if not vendor_obj.vendor_name:
+                    vendor_obj.vendor_name = vendor_name
+                if not vendor_obj.bucket_no:
+                    vendor_obj.bucket_no = bucketNo
+
             vendor_obj.save()
 
         # Create or update vehicle
-        vehicle_obj, created = VEHICLE_MASTER.objects.update_or_create(
-            rfid=rfid,
-            defaults={
-                "vehicle_number": vehicle_number,
-                "vendor_code": vendor_code,
-                "create_time": timezone.now()
-            }
-        )
+        rfid_list = rfid.split("|")
+
+        for r in rfid_list:
+            VEHICLE_MASTER.objects.update_or_create(
+                rfid=r.strip(),
+                defaults={
+                    "vehicle_number": vehicle_number,
+                    "vendor_code": vendor_code,
+                    "create_time": timezone.now()
+                }
+            )
 
         return JsonResponse({
             "success": True,
             "message": "Vehicle added/updated successfully",
-            "vehicle_id": vehicle_obj.id
+            "vehicle_no": vehicle_number
         })
 
     except Exception as e:
@@ -177,48 +190,94 @@ def add_vehicle(request):
             "error": str(e)
         }, status=500)
 
+# Custom LOCATE function for MySQL
+class Locate(Func):
+    function = 'LOCATE'
+    arity = 2
+
 @csrf_exempt
 def fetch_history_data(request):
     start_date = request.GET.get('start_date')
     end_date = request.GET.get('end_date')
-    
     vehicle_number = request.GET.get('vehicle_number')
     vendor_name = request.GET.get('vendor_name')
 
+    # ---- Date Parsing ----
     try:
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-    except:
+    except Exception:
         return JsonResponse({'error': 'Invalid date format'}, status=400)
 
-    queryset = VEHICLE_LOGS.objects.filter(
-            create_time__date__gte=start_dt,
-            create_time__date__lte=end_dt,
-        ).annotate(
+    # ---- Subquery: Match RFID inside pipe-separated string ----
+    vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
+        rfid_wrapped=Concat(
+            Value('|'),
+            F('rfid'),
+            Value('|'),
+            output_field=CharField()
+        ),
+        rfids_wrapped=Concat(
+            Value('|'),
+            OuterRef('rfids'),
+            Value('|'),
+            output_field=CharField()
+        )
+    ).annotate(
+        match=Locate(F('rfid_wrapped'), F('rfids_wrapped'))
+    ).filter(match__gt=0)
 
-        ).order_by(
-            "create_time"
+    # ---- Subquery: Vendor from vehicle ----
+    vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
+        rfid_wrapped=Concat(
+            Value('|'), F('rfid'), Value('|'),
+            output_field=CharField()
+        ),
+        rfids_wrapped=Concat(
+            Value('|'), OuterRef('rfids'), Value('|'),
+            output_field=CharField()
         )
-    
+    ).annotate(
+        match=Locate(F('rfid_wrapped'), F('rfids_wrapped'))
+    ).filter(match__gt=0)
+
+    vendor_master_qs = VENDOR_MASTER.objects.filter(
+        vendor_code=OuterRef('vendor_code')
+    )
+
+    # ---- Main Query ----
+    queryset = VEHICLE_LOGS.objects.filter(
+        create_time__date__gte=start_dt,
+        create_time__date__lte=end_dt,
+    ).annotate(
+        vehicle_number=Subquery(vehicle_master_qs.values('vehicle_number')[:1]),
+        vendor_code=Subquery(vehicle_master_qs.values('vendor_code')[:1]),
+    ).annotate(
+        vendor_name=Subquery(vendor_master_qs.values('vendor_name')[:1]),
+        bucket_no=Subquery(vendor_master_qs.values('bucket_no')[:1]),
+    ).order_by("create_time")
+
+    # ---- Filters (after annotation) ----
     if vehicle_number:
-        queryset = queryset.filter(
-            vehicle_number__icontains = vehicle_number,
-        )
+        queryset = queryset.filter(vehicle_number__icontains=vehicle_number)
+
     if vendor_name:
-        queryset = queryset.filter(
-            vendor_name__icontains = vendor_name,
-        )
+        queryset = queryset.filter(vendor_name__icontains=vendor_name)
 
     results = []
     for idx, row in enumerate(queryset, start=1):
         results.append({
             "sno": idx,
-            "anode_number": row["anode_number"],
-            "bunch_name": row["bunch_number"],
-            "capture_time": row["create_time"].strftime("%Y-%m-%d %H:%M:%S"),
-            "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
-            "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
-            "view_image": f"/api/serve-file?file={row['image_path']}" if row["image_path"] else None,
+            "datetimestamp": row.create_time.strftime("%Y-%m-%d %H:%M:%S") if row.create_time else None,
+            "vehicle_number": row.vehicle_number,
+            "vendor_name": row.vendor_name,
+            "vendor_code": row.vendor_code,
+            "vehicle_image": f"/api/serve-file?file={row.vehicle_img_path}" if row.vehicle_img_path else None,
+            "sample_1_image": f"/api/serve-file?file={row.sample_1_img_path}" if row.sample_1_img_path else None,
+            "sample_2_image": f"/api/serve-file?file={row.sample_2_img_path}" if row.sample_2_img_path else None,
+            "sample_3_image": f"/api/serve-file?file={row.sample_3_img_path}" if row.sample_3_img_path else None,
+            "qr_code": f"/api/serve-file?file={row.QR_code_path}" if row.QR_code_path else None,
+            "bucket_no": row.bucket_no,
         })
 
     return JsonResponse({
@@ -263,142 +322,115 @@ def health_status(request):
         "data": results,
     })
 
-
 @csrf_exempt
 def get_current_status(request):
-    """Get current vehicle, state, and emergency/auto_manual status"""
     try:
-        # Get the current in-progress vehicle
+        # 1. Get active vehicle
         current_vehicle = VEHICLE_LOGS.objects.filter(status="IN_PROGRESS").first()
-        
+
         if not current_vehicle:
             return JsonResponse({
-                "add_vehicle": "No",
                 "status": "idle",
                 "uid": None,
+                "current_state": "IDLE",
                 "vehicle_number": "NOT_FOUND",
                 "vendor_name": "NOT_FOUND",
-                "current_state": "IDLE",
+                "vendor_code": None,
+                "add_vehicle": "NO",
                 "emergency": None,
                 "auto_manual": None,
-                "emergency_acknowledged": False,
-                "auto_manual_acknowledged": False,
             })
-        
-        # Get PLC communication record
-        plc_comm = PLC_COMM.objects.filter(uid=current_vehicle.uid).first()
-        
-        # Get vehicle details
-        all_rfids = current_vehicle.rfids if current_vehicle.rfids else "Dummy"
+
+        # 2. Extract RFIDs
         rfids = (current_vehicle.rfids or "").split("|")
-        vehicle_number = "NOT_FOUND"
-        vendor_name = "NOT_FOUND"
-        
+
+        vehicle_obj = None
+        vendor_obj = None
+
+        # 3. Find first matching RFID
         for rfid in rfids:
-            vehicle = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
-            if vehicle:
-                vendor = VENDOR_MASTER.objects.filter(vendor_code=vehicle.vendor_code).first()
-                vehicle_number = vehicle.vehicle_number
-                vendor_name = vendor.vendor_name if vendor else "NOT_FOUND"
+            rfid = rfid.strip()
+            if not rfid:
+                continue
+
+            vehicle_obj = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
+            if vehicle_obj:
+                vendor_obj = VENDOR_MASTER.objects.filter(
+                    vendor_code=vehicle_obj.vendor_code
+                ).first()
                 break
-        
-        if plc_comm:
+
+        # 4. If NO vehicle found → trigger ADD VEHICLE FLOW
+        if not vehicle_obj:
+            vendors = list(
+                VENDOR_MASTER.objects.values("vendor_code", "vendor_name", "bucket_no")
+            )
+
             return JsonResponse({
-                "add_vehicle": "No",
                 "status": "in_progress",
                 "uid": current_vehicle.uid,
-                "vehicle_number": vehicle_number,
-                "vendor_name": vendor_name,
-                "current_state": plc_comm.state,
-                "emergency": plc_comm.emergency,
-                "auto_manual": plc_comm.auto_manual,
-                "emergency_acknowledged": plc_comm.emergency_acknowledged,
-                "auto_manual_acknowledged": plc_comm.auto_manual_acknowledged,
-                "user_approved_skip_cycles": plc_comm.user_approved_skip_cycles,
-            })
-        else:
-            return JsonResponse({
-                "add_vehicle": "YES",
-                "rfids": all_rfids,
-                "status": "in_progress",
-                "uid": current_vehicle.uid,
-                "vehicle_number": vehicle_number,
-                "vendor_name": vendor_name,
-                "current_state": "UNKNOWN",
+                "rfids": current_vehicle.rfids,
+                "add_vehicle": "YES", 
+                "vendors": vendors, 
+                "current_state": "WAITING_FOR_VEHICLE_MASTER",
+                "vehicle_number": None,
+                "vendor_name": None,
+                "vendor_code": None,
                 "emergency": None,
                 "auto_manual": None,
-                "emergency_acknowledged": False,
-                "auto_manual_acknowledged": False,
-                "user_approved_skip_cycles": False,
             })
-    
+
+        # 5. Get PLC state
+        plc = PLC_COMM.objects.filter(uid=current_vehicle.uid).first()
+
+        current_state = "UNKNOWN"
+        emergency = None
+        auto_manual = None
+
+        if plc:
+            current_state = plc.state
+            emergency = plc.emergency
+            auto_manual = plc.auto_manual
+
+            if emergency == "ACTIVE":
+                return JsonResponse({
+                    "status": "blocked",
+                    "reason": "EMERGENCY_ACTIVE",
+                    "uid": current_vehicle.uid,
+                    "current_state": current_state,
+                    "vehicle_number": vehicle_obj.vehicle_number,
+                    "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
+                })
+
+            if auto_manual == "ACTIVE":
+                return JsonResponse({
+                    "status": "blocked",
+                    "reason": "AUTO_MANUAL_ACTIVE",
+                    "uid": current_vehicle.uid,
+                    "current_state": current_state,
+                    "vehicle_number": vehicle_obj.vehicle_number,
+                    "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
+                })
+
+        # 6. Normal flow
+        return JsonResponse({
+            "status": "in_progress",
+            "uid": current_vehicle.uid,
+            "add_vehicle": "NO",
+            "current_state": current_state,
+            "vehicle_number": vehicle_obj.vehicle_number,
+            "vendor_name": vendor_obj.vendor_name if vendor_obj else "NOT_FOUND",
+            "vendor_code": vehicle_obj.vendor_code,
+            "emergency": emergency,
+            "auto_manual": auto_manual,
+        })
+
     except Exception as e:
-        print(f"Error in get_current_status: {e}")
-        return JsonResponse({"add_vehicle": "No", "error": str(e)}, status=500)
-
-
-@csrf_exempt
-def acknowledge_emergency(request):
-    """Handle emergency popup acknowledgment - user wants to retake cycles"""
-    if request.method != "POST":
-        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
-    
-    try:
-        data = json.loads(request.body)
-        uid = data.get("uid")
-        retake_cycles = data.get("retake_cycles", True)
-        
-        plc_comm = PLC_COMM.objects.filter(uid=uid).first()
-        if plc_comm:
-            plc_comm.emergency_acknowledged = True
-            plc_comm.user_approved_skip_cycles = not retake_cycles
-            plc_comm.updated = timezone.now()
-            plc_comm.save()
-            
-            return JsonResponse({
-                "success": True,
-                "message": "Emergency acknowledged",
-                "retake_cycles": retake_cycles
-            })
-        else:
-            return JsonResponse({"success": False, "error": "No PLC record found"}, status=404)
-    
-    except Exception as e:
-        print(f"Error in acknowledge_emergency: {e}")
-        return JsonResponse({"success": False, "error": str(e)}, status=500)
-
-
-@csrf_exempt
-def acknowledge_auto_manual(request):
-    """Handle auto_manual popup acknowledgment - user confirms or skips cycles"""
-    if request.method != "POST":
-        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
-    
-    try:
-        data = json.loads(request.body)
-        uid = data.get("uid")
-        user_action = data.get("user_action")  # "continue" or "skip_all_cycles"
-        
-        plc_comm = PLC_COMM.objects.filter(uid=uid).first()
-        if plc_comm:
-            plc_comm.auto_manual_acknowledged = True
-            if user_action == "skip_all_cycles":
-                plc_comm.user_approved_skip_cycles = True
-            plc_comm.updated = timezone.now()
-            plc_comm.save()
-            
-            return JsonResponse({
-                "success": True,
-                "message": "Auto manual acknowledged",
-                "user_action": user_action
-            })
-        else:
-            return JsonResponse({"success": False, "error": "No PLC record found"}, status=404)
-    
-    except Exception as e:
-        print(f"Error in acknowledge_auto_manual: {e}")
-        return JsonResponse({"success": False, "error": str(e)}, status=500)
-
+        print(f"[ERROR] get_current_status: {e}")
+        return JsonResponse({
+            "status": "error",
+            "message": str(e)
+        }, status=500)
 
 @csrf_exempt
 def reset_system(request):

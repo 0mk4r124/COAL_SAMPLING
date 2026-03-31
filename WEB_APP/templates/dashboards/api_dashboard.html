@@ -17,9 +17,9 @@
         <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#HISTORY">HISTORY</button>
         </li>
-        <li class="nav-item">
+        <!-- <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#VEHICLE">VEHICLE MASTER</button>
-        </li>
+        </li> -->
         <li class="nav-item">
             <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#HEALTH">HEALTH STATUS</button>
         </li>
@@ -115,9 +115,15 @@
                         <thead class="table-dark">
                             <tr>
                                 <th>SNo.</th>
+                                <th>DATETIME</th>
                                 <th>VEHICLE NUMBER</th>
                                 <th>VENDOR NAME</th>
                                 <th>VENDOR CODE</th>
+                                <th>VEHICLE IMAGE</th>
+                                <th>SAMPLE 1 IMAGE</th>
+                                <th>SAMPLE 2 IMAGE</th>
+                                <th>SAMPLE 3 IMAGE</th>
+                                <th>QR CODE</th>
                                 <th>BUCKET NUMBER</th>
                             </tr>
                         </thead>
@@ -154,7 +160,7 @@
                             <div class="input-group-prepend">
                                 <span class="input-group-text h-100"><i class="fas fa-search"></i></span>
                             </div>
-                            <input type="text" id="vehicle_num_search" name="vehicle_num_search"
+                            <input type="text" id="vehicle_number_search" name="vehicle_number_search"
                                 class="form-control" placeholder="Search Vehicle Number" autocomplete="off">
                         </div>
                     </div>
@@ -191,10 +197,11 @@
                                 <th>VEHICLE NUMBER</th>
                                 <th>VENDOR NAME</th>
                                 <th>VENDOR CODE</th>
+                                <th>VIEW VEHICLE IMAGE</th>
                                 <th>VIEW IMAGE 1</th>
                                 <th>VIEW IMAGE 2</th>
                                 <th>VIEW IMAGE 3</th>
-                                <th>VIEW REPORT</th>
+                                <th>QR CODE</th>
                             </tr>
                         </thead>
                         <tbody id="History_body"></tbody>
@@ -300,8 +307,10 @@
                     <!-- Vendor Name -->
                     <div class="mb-3">
                         <label class="form-label fw-bold fs-3 mx-3">Vendor Name</label>
-                        <input type="text" class="form-control form-control-lg" id="vendorNameInput"
-                            placeholder="Enter vendor name">
+                        <input type="text" class="form-control form-control-lg" id="vendorNameInput" list="vendorList">
+                        
+                        <!-- Suggestions -->
+                        <datalist id="vendorList"></datalist>
                     </div>
                     <!-- Vendor Code -->
                     <div class="mb-3">
@@ -461,6 +470,24 @@
                 <button type="button" class="btn btn-danger btn-lg" onclick="confirmResetSystem()">
                     <i class="fas fa-check-circle"></i> Yes, Reset System
                 </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="waitModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-4 border-warning">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-exclamation-triangle"></i> SYSTEM WAIT
+                </h5>
+            </div>
+            <div class="modal-body text-center">
+                <div class="spinner-border text-warning mb-3" role="status"></div>
+                <p id="waitModalMessage" class="fs-5 fw-bold">
+                    Waiting...
+                </p>
             </div>
         </div>
     </div>

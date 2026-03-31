@@ -69,9 +69,9 @@ class PLC_COMM(models.Model):
     status = models.CharField(db_column='STATUS', max_length=20, blank=True, null=True)
     emergency = models.CharField(db_column='EMERGENCY', max_length=20, blank=True, null=True)
     auto_manual = models.CharField(db_column='AUTO_MANUAL', max_length=20, blank=True, null=True)
-    emergency_acknowledged = models.BooleanField(db_column='EMERGENCY_ACKNOWLEDGED', default=False, blank=True, null=True)
-    auto_manual_acknowledged = models.BooleanField(db_column='AUTO_MANUAL_ACKNOWLEDGED', default=False, blank=True, null=True)
-    user_approved_skip_cycles = models.BooleanField(db_column='USER_APPROVED_SKIP_CYCLES', default=False, blank=True, null=True)
+    # emergency_acknowledged = models.BooleanField(db_column='EMERGENCY_ACKNOWLEDGED', default=False, blank=True, null=True)
+    # auto_manual_acknowledged = models.BooleanField(db_column='AUTO_MANUAL_ACKNOWLEDGED', default=False, blank=True, null=True)
+    # user_approved_skip_cycles = models.BooleanField(db_column='USER_APPROVED_SKIP_CYCLES', default=False, blank=True, null=True)
     updated = models.DateTimeField(db_column='UPDATED', blank=True, null=True)
 
     class Meta:

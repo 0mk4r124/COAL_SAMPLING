@@ -40,158 +40,118 @@ const csrftoken = getCookie("csrftoken");
 // STATE AND STATUS MANAGEMENT
 // ════════════════════════════════════════════════════════════════════════════
 
+let waitModalInstance = null;
+let waitModalOpen = false;
+
+function handleBlockingState(data) {
+    const modalEl = document.getElementById('waitModal');
+
+    if (!waitModalInstance) {
+        waitModalInstance = new bootstrap.Modal(modalEl, {
+            backdrop: 'static',
+            keyboard: false
+        });
+    }
+
+    if (data.status === "blocked") {
+        if (!waitModalOpen) {
+            waitModalOpen = true;
+
+            const message = document.getElementById('waitModalMessage');
+
+            if (data.reason === "EMERGENCY_ACTIVE") {
+                message.textContent = "Emergency is ACTIVE. Waiting until it is cleared...";
+            } 
+            else if (data.reason === "AUTO_MANUAL_ACTIVE") {
+                message.textContent = "Manual mode is ACTIVE. Waiting until it is cleared...";
+            } 
+            else {
+                message.textContent = "System is blocked. Waiting...";
+            }
+
+            waitModalInstance.show();
+        }
+
+        return true; // block further UI updates
+    }
+
+    // ✅ HIDE MODAL when cleared
+    if (waitModalOpen) {
+        waitModalOpen = false;
+        waitModalInstance.hide();
+    }
+
+    return false;
+}
+
+document.getElementById('vendorNameInput').addEventListener('input', function () {
+
+    const inputValue = this.value.trim().toLowerCase();
+
+    const vendorCodeInput = document.getElementById('vendorCodeInput');
+    const bucketInput = document.getElementById('bucketNoInput');
+
+    // Try to find match
+    const match = window.vendorCache.find(v => 
+        v.vendor_name.toLowerCase() === inputValue
+    );
+
+    if (match) {
+        // ✅ Existing vendor → autofill
+        vendorCodeInput.value = match.vendor_code || '';
+        bucketInput.value = match.bucket_no || '';
+
+        vendorCodeInput.readOnly = true;
+        bucketInput.readOnly = true;
+    } else {
+        // ✅ New vendor → allow input
+        vendorCodeInput.value = '';
+        bucketInput.value = '';
+
+        vendorCodeInput.readOnly = false;
+        bucketInput.readOnly = false;
+    }
+});
+
 function updateCurrentStatus() {
     "use strict";
     fetch('/api/get_current_status/')
         .then(response => response.json())
         .then(data => {
             // Update state display
-            if (data.add_vehicle === "YES" && !vehicleDetailsModalOpen){
+
+            if (handleBlockingState(data)) {
+                return; // stop everything else
+            }
+
+            if (data.add_vehicle === "YES" && !vehicleDetailsModalOpen) {
+
                 const input = document.getElementById('rfidInput');
-                input.value = data.rfids || 'Dummy';
+                input.value = data.rfids || '';
                 input.disabled = true;
+
+                window.vendorCache = data.vendors || [];
+                const datalist = document.getElementById('vendorList');
+                datalist.innerHTML = '';
+                window.vendorCache.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v.vendor_name;
+                    datalist.appendChild(opt);
+                });
+            
                 vehicleDetailsModalOpen = true;
-                const vehicleDetailsModal = new bootstrap.Modal(document.getElementById('vehicleDetailsModal'));
-                vehicleDetailsModal.show();
+                const modal = new bootstrap.Modal(document.getElementById('vehicleDetailsModal'));
+                modal.show();
             }
-            if (data.current_state === "SET_BUCKET"){
-                vehicleDetailsModalOpen = false;
-            }
+
             document.getElementById('currentState').textContent = data.current_state || 'IDLE';
             document.getElementById('dashVendorName').textContent = data.vendor_name || 'NOT FOUND';
             document.getElementById('dashVehicleNumber').textContent = data.vehicle_number || 'NOT FOUND';
             
             currentUID = data.uid;
             
-            // Handle emergency status
-            if (data.emergency === 'ACTIVE' && !emergencyModalOpen) {
-                emergencyModalOpen = true;
-                autoManualModalOpen = false;
-                showEmergencyModal();
-            } else if (data.emergency === null && emergencyModalOpen) {
-                // Emergency was just cleared
-                emergencyModalOpen = false;
-                if (data.emergency_acknowledged) {
-                    showEmergencyClearedModal();
-                }
-            }
-            
-            // Handle auto_manual status
-            if (data.auto_manual === 'MANUAL' && !autoManualModalOpen) {
-                autoManualModalOpen = true;
-                emergencyModalOpen = false;
-                showAutoManualModal();
-            }
         })
         .catch(err => console.error("Status update failed:", err));
-}
-
-function showEmergencyModal() {
-    const emergencyModal = new bootstrap.Modal(document.getElementById('emergencyModal'));
-    emergencyModal.show();
-}
-
-function showEmergencyClearedModal() {
-    bootstrap.Modal.getInstance(document.getElementById('emergencyModal')).hide()
-    const emergencyClearedModal = new bootstrap.Modal(document.getElementById('emergencyClearedModal'));
-    emergencyClearedModal.show();
-}
-
-function showAutoManualModal() {
-    const autoManualModal = new bootstrap.Modal(document.getElementById('autoManualModal'));
-    autoManualModal.show();
-}
-
-function handleEmergencyRetake() {
-    // User wants to retake cycles after emergency
-    fetch('/api/acknowledge_emergency/', {
-        method: 'POST',
-        headers: {
-            'X-CSRFToken': csrftoken,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            uid: currentUID,
-            retake_cycles: true
-        })
-    })
-    .then(r => r.json())
-    .then(res => {
-        if (res.success) {
-            bootstrap.Modal.getInstance(document.getElementById('emergencyClearedModal')).hide();
-            alert('Cycles will be retaken. System resuming...');
-        }
-    })
-    .catch(err => console.error(err));
-}
-
-function handleEmergencySkip() {
-    // User wants to skip cycles after emergency
-    fetch('/api/acknowledge_emergency/', {
-        method: 'POST',
-        headers: {
-            'X-CSRFToken': csrftoken,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            uid: currentUID,
-            retake_cycles: false
-        })
-    })
-    .then(r => r.json())
-    .then(res => {
-        if (res.success) {
-            bootstrap.Modal.getInstance(document.getElementById('emergencyClearedModal')).hide();
-            alert('Vehicle marked as completed without additional cycles. System resuming...');
-        }
-    })
-    .catch(err => console.error(err));
-}
-
-function handleAutoManualContinue() {
-    // User wants to continue with automatic cycles
-    fetch('/api/acknowledge_auto_manual/', {
-        method: 'POST',
-        headers: {
-            'X-CSRFToken': csrftoken,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            uid: currentUID,
-            user_action: 'continue'
-        })
-    })
-    .then(r => r.json())
-    .then(res => {
-        if (res.success) {
-            bootstrap.Modal.getInstance(document.getElementById('autoManualModal')).hide();
-            alert('Continuing with automatic cycles...');
-        }
-    })
-    .catch(err => console.error(err));
-}
-
-function handleAutoManualSkip() {
-    // User wants to skip all cycles
-    fetch('/api/acknowledge_auto_manual/', {
-        method: 'POST',
-        headers: {
-            'X-CSRFToken': csrftoken,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            uid: currentUID,
-            user_action: 'skip_all_cycles'
-        })
-    })
-    .then(r => r.json())
-    .then(res => {
-        if (res.success) {
-            bootstrap.Modal.getInstance(document.getElementById('autoManualModal')).hide();
-            alert('Skipping remaining cycles. Vehicle will be marked as completed...');
-        }
-    })
-    .catch(err => console.error(err));
 }
 
 function resetSystemConfirm() {
@@ -328,7 +288,6 @@ function fetchHistoryData(page=1) {
         .then(data => {
             populateTable(data.data, 'History_body');
             setupPagination(data.total, data.page, data.per_page, "history");
-            document.getElementById("total_bunch_count").textContent = data.total;
         })
         .catch(err => console.error(err));
 }
@@ -340,25 +299,29 @@ function populateTable(data, table_name) {
     if (table_name === 'History_body'){
         data.forEach(row => {
             const tr = document.createElement('tr');
-            const Img1Button = row.img_1_path
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.img_1_path}">Image View</button>`
+            const VehicleImgButton = row.vehicle_image
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.vehicle_image}">Image View</button>`
                 : "";
-            const Img2Button = row.img_2_path
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.img_2_path}">Image View</button>`
+            const Img1Button = row.sample_1_image
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_1_image}">Image View</button>`
                 : "";
-            const Img3Button = row.img_3_path
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.img_3_path}">Image View</button>`
+            const Img2Button = row.sample_2_image
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_2_image}">Image View</button>`
                 : "";
-            const ReportButton = row.report_path
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicleNumber="${row.vehicle_number}" data-src="${row.report_path}">Report View</button>`
+            const Img3Button = row.sample_3_image
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_3_image}">Image View</button>`
+                : "";
+            const ReportButton = row.qr_code
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.qr_code}">Report View</button>`
                 : "";
 
             tr.innerHTML = `
                 <td>${row.sno}</td>
                 <td>${row.datetimestamp}</td>
                 <td>${row.vehicle_number}</td>
-                <td>${row.vendoe_name}</td>
+                <td>${row.vendor_name}</td>
                 <td>${row.vendor_code}</td>
+                <td>${VehicleImgButton}</td>
                 <td>${Img1Button}</td>
                 <td>${Img2Button}</td>
                 <td>${Img3Button}</td>
@@ -453,17 +416,19 @@ function renderPagination(pagination, tab) {
 
 // POST REQUEST FOR ADDING VEHICLE AND VENDOR
 document.getElementById('submitVehicleDetailsBtn').addEventListener("click", function () {
+
     const rfid = document.getElementById("rfidInput").value;
     const vehicleNumber = document.getElementById("vehicleNumberInput").value;
-    const vendorName = document.getElementById("vendorNameInput").value;
-    const vendorCode = document.getElementById("vendorCodeInput").value;
+
+    const vendorNameInput = document.getElementById("vendorNameInput").value;
+    const vendorCodeInput = document.getElementById("vendorCodeInput").value;
     const bucketNo = document.getElementById("bucketNoInput").value;
 
-    const payload = {
+    let payload = {
         rfid: rfid,
         vehicleNumber: vehicleNumber,
-        vendorName: vendorName,
-        vendorCode: vendorCode,
+        vendorName: vendorNameInput,
+        vendorCode: vendorCodeInput,
         bucketNo: bucketNo,
     };
 
@@ -471,7 +436,8 @@ document.getElementById('submitVehicleDetailsBtn').addEventListener("click", fun
         method: "POST",
         headers: { 
             "X-CSRFToken": csrftoken,
-            "Content-Type": "application/json", },
+            "Content-Type": "application/json",
+        },
         body: JSON.stringify(payload),
     })
     .then(r => r.json())
@@ -479,21 +445,13 @@ document.getElementById('submitVehicleDetailsBtn').addEventListener("click", fun
         if (res.success) {
             alert("Vehicle updated successfully");
 
-            // Reset form fields
             document.getElementById("vehicleDetailsForm").reset();
 
-            // Close modal
             const modalEl = document.getElementById("vehicleDetailsModal");
-            const modalInstance = bootstrap.Modal.getInstance(modalEl);
-            modalInstance.hide();
+            bootstrap.Modal.getInstance(modalEl).hide();
 
-            // Reset modal flag so it can open again for next vehicle
-            modalOpen = false;
-
-            // Clear RFID field as well
-            document.getElementById("rfidInput").value = "";
-        } 
-        else {
+            vehicleDetailsModalOpen = false;
+        } else {
             alert(res.error || "Failed to update");
         }
     })
@@ -505,11 +463,14 @@ document.addEventListener('click', function (e) {
     if (!btn) return;
 
     const vehicle_number = btn.dataset.vehicle_number;
+    const imgSrc = btn.dataset.src;
     document.getElementById("vehicle_number").innerHTML = `Vehicle Number: <b>${vehicle_number}</b>`;
 
-    const modal = new bootstrap.Modal(document.getElementById('imageModal'));
+    const modalEl = document.getElementById('imageModal');
+    modalEl.dataset.src = imgSrc;
+
+    const modal = new bootstrap.Modal(modalEl);
     modal.show();
-    document.getElementById("imageModal").dataset.src = imgSrc;
 });
 
 document.getElementById("imageModal")
@@ -524,24 +485,32 @@ document.getElementById("imageModal")
 });
 
 document.getElementById("imageModal")
-    .addEventListener("shown.bs.modal", function () {
+.addEventListener("shown.bs.modal", function () {
 
-        const img = document.getElementById("modalImage");
-        const loader = document.getElementById("imageLoader");
-        const src = this.dataset.src;
+    const img = document.getElementById("modalImage");
+    const loader = document.getElementById("imageLoader");
+    const src = this.dataset.src;
 
-        if (!src) return;
+    if (!src) return;
 
-        isImageLoading = true;
+    isImageLoading = true;
 
-        loader.style.display = "block";
+    loader.style.display = "block";
+    img.style.display = "none";
+
+    img.onload = function () {
+        loader.style.display = "none";
+        img.style.display = "block";
+        isImageLoading = false;
+    };
+
+    img.onerror = function () {
+        loader.style.display = "none";
         img.style.display = "none";
+        isImageLoading = false;
+    };
 
-        // Force browser paint before loading
-        requestAnimationFrame(() => {
-            img.src = "";
-            img.src = src;
-        });
+    img.src = src;
 });
 
 function updateSystemStatus() {
@@ -629,13 +598,46 @@ function updateCameraImages() {
         .catch(err => console.error("Error fetching camera images:", err));
 }
 
+// Update on user activity
+function resetActivityTimer() {
+    lastActivityTime = Date.now();
+}
+
+// Listen to common user actions
+['click', 'mousemove', 'keydown', 'scroll', 'touchstart'].forEach(event => {
+    document.addEventListener(event, resetActivityTimer, true);
+});
+
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
-    fetchSystemStatus();
-    updateCurrentStatus(); // Initial check
+
+    async function pollSystem() {
+        try {
+            await fetchSystemStatus();
+            await updateCurrentStatus();
+            await updateCameraImages();
+        } catch (err) {
+            console.error("Polling error:", err);
+        }
+    }
+
+    // Initial run
+    pollSystem();
+
+    // Single polling loop
+    setInterval(pollSystem, 2000);
+
+    // Smart refresh
+    setInterval(() => {
+        const now = Date.now();
+        const inactivityDuration = now - lastActivityTime;
     
-    // Update current state and emergency/auto_manual status every 2 seconds
-    setInterval(fetchSystemStatus, 10000);
-    setInterval(updateCurrentStatus, 5000);
-    setInterval(updateCameraImages, 2000);
+        const FIFTEEN_MIN = 15 * 60 * 1000;
+    
+        if (inactivityDuration > FIFTEEN_MIN) {
+            console.log("Auto-refreshing due to inactivity");
+            window.location.reload();
+        }
+    }, 10 * 1000);
+
 });
