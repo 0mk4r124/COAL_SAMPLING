@@ -214,6 +214,7 @@ def _validate_cam1_region(image_path: str) -> bool:
         
         # Run inference on full image
         masked_img, labellist = _inference_model.run_inference(image)
+        cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
         
         if not labellist:
             logger.info("CAM1: No objects detected - region is clear")
@@ -267,7 +268,8 @@ def _validate_cam1_region(image_path: str) -> bool:
                 cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 255, 0), 1)
                 logger.debug(f"CAM1: '{class_name}' detected but outside region (confidence: {score:.2f})")
         
-        cv2.imwrite("test.jpg", vis_img)
+        # cv2.imwrite("test.jpg", vis_img)
+        cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
         
         # Result: Pass only if NO forbidden objects overlap the region
         if has_forbidden_objects:
@@ -402,7 +404,8 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
             cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
             cv2.circle(vis_img, reference_point, 8, (255, 165, 0), -1)
         
-        cv2.imwrite("test.jpg", vis_img)
+        # cv2.imwrite("test.jpg", vis_img)
+        cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
         
         # ─── Validate Reference Point Inside Coal Area ───────────────────────
         coal_x_min = coal_area_bbox['x_min']

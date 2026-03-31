@@ -45,6 +45,27 @@ body {
     border-radius: 4px;
 }
 
+/* Camera preview box */
+.video-box-lg {
+    background: #f8f9fa;
+    border: 1px dashed #ccc;
+    border-radius: 6px;
+    height: 53vh; /* converted from 220px to vh */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    position: relative;
+}
+
+.video-box-lg img,
+.video-box-lg video {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain; /* contain keeps full image inside box */
+    border-radius: 4px;
+}
+
 /* Camera cards equal height */
 .camera-card {
     height: 100%;
