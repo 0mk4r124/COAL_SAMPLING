@@ -8,10 +8,7 @@ from datetime import datetime
 from enum import Enum, auto
 
 from DEPENDANT.MQTT import MQTT
-from LOGGING_CONFIG import initializeLogger
-
-# Initialize logger
-logger = initializeLogger("MAIN_MANAGER")
+from DEPENDANT.LOGGING import initializeLogger
 
 from LOGIC import (
     initialize_ai_model,
@@ -33,60 +30,92 @@ DB_NAME = "COAL_SAMPLING_DHAR"
 DB_POLL_SEC     = 10
 DB_WAIT_TIMEOUT = 300
 TOTAL_CYCLES    = 3
-HOME_POSITION_TIMEOUT = 600
+HOME_POSITION_TIMEOUT = 300
 SAMPLE_CYCLE_TIMEOUT = 600
 POSITION_CONFIRMATION_TIMEOUT = 120
 CLOSE_CYCLE_WAIT_TIME = 120
+SET_BUCKET_WAIT_TIMEOUT = 120
 
 TEMP_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
 RESULT_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RESULT/"
 INF_IMG = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/INF/"
+LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
 
-def get_sample_positions(used_areas=None):
-    if used_areas is None:
-        used_areas = []
+# Initialize logger
+logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
-    # Define all possible areas
-    all_areas = set(range(1, 7))
-    available_areas = list(all_areas - set(used_areas))
+def get_sample_positions(num_points=3):
+    # Area groups
+    area_groups = [
+        [1, 2],
+        [3, 4],
+        [5, 6]
+    ]
 
-    if not available_areas:
-        raise ValueError("All areas are already used")
-
-    # Pick random available area
-    area = random.choice(available_areas)
+    # Flip mapping (1 <-> 6, 2 <-> 5, 3 <-> 4)
+    def flip_area(a):
+        return 7 - a
 
     # Global bounds
-    x_min, x_max = 50, 100
+    x_min, x_max = 40, 100
     y_min, y_max = 40, 70
 
-    # Grid split
     x_splits = 3
     y_splits = 2
 
-    x_step = (x_max - x_min) / x_splits
+    width = x_max - x_min
+    min_x_gap = 15
+
+    x_step = width / x_splits
     y_step = (y_max - y_min) / y_splits
 
-    # Map area → grid index
-    row = (area - 1) // x_splits
-    col = (area - 1) % x_splits
+    selected_points = []
+    used_groups = []
 
-    # Cell bounds
-    x_start = x_min + col * x_step
-    x_end = x_start + x_step
+    # Shuffle groups to add randomness in selection order
+    random.shuffle(area_groups)
 
-    y_start = y_min + row * y_step
-    y_end = y_start + y_step
+    for group in area_groups:
+        # Pick one area from the pair
+        raw_area = random.choice(group)
+        area = flip_area(raw_area)
 
-    # Uniform integer sampling
-    x = random.randint(int(x_start), int(x_end) - 1)
-    y = random.randint(int(y_start), int(y_end) - 1)
+        # Grid mapping
+        row = (area - 1) // x_splits
+        col = (area - 1) % x_splits
 
-    return {
-        "x": x,
-        "y": y,
-        "area": area
-    }
+        # Cell bounds
+        x_start = x_min + col * x_step
+        x_end = x_start + x_step
+
+        y_start = y_min + row * y_step
+        y_end = y_start + y_step
+
+        # Center for controlled X
+        x_center = (x_start + x_end) / 2
+
+        max_attempts = 30
+
+        for _ in range(max_attempts):
+            # Controlled X (not too random)
+            x = int(x_center + random.uniform(-x_step * 0.25, x_step * 0.25))
+            x = max(int(x_start), min(x, int(x_end) - 1))
+
+            # Fully random Y within region
+            y = random.randint(int(y_start), int(y_end) - 1)
+
+            # Enforce X distance constraint
+            if all(abs(x - p["x"]) >= min_x_gap for p in selected_points):
+                selected_points.append({
+                    "x": x,
+                    "y": y,
+                    "area": area
+                })
+                break
+        else:
+            raise ValueError("Could not satisfy X-distance constraint")
+
+    return selected_points
 
 # ── State machine ─────────────────────────────────────────────────────────────
 class State(Enum):
@@ -141,7 +170,7 @@ def db_find_vehicle(rfid: str) -> dict | None:
         )
         return cur.fetchone()
     except Exception as e:
-        print(f"[DB] db_find_vehicle error: {e}")
+        logger.error(f"[DB] db_find_vehicle error: {e}")
         return None
     finally:
         if db: db.close()
@@ -167,7 +196,7 @@ def db_vehicle_already_in_front(rfids_str: str) -> bool:
         row = cur.fetchone()
         return (row[0] > 1) if row else False
     except Exception as e:
-        print(f"[DB] db_vehicle_already_in_front error: {e}")
+        logger.error(f"[DB] db_vehicle_already_in_front error: {e}")
         return False
     finally:
         if db: db.close()
@@ -209,7 +238,7 @@ def db_create_log(uid: str, rfids: list, paths: dict) -> bool:
         print(f"[DB] Log created  uid={uid}  rfids={rfids}")
         return True
     except Exception as e:
-        print(f"[DB] db_create_log error: {e}")
+        logger.error(f"[DB] db_create_log error: {e}")
         return False
     finally:
         if db: db.close()
@@ -229,7 +258,7 @@ def db_error_log(uid: str, msg: str) -> bool:
         )
         db.commit()
     except Exception as e:
-        print(f"[DB] db_complete_log error: {e}")
+        logger.error(f"[DB] db_complete_log error: {e}")
     finally:
         if db: db.close()
 
@@ -249,7 +278,7 @@ def db_complete_log(uid: str) -> bool:
         db.commit()
         print("DB complete Added !!!!!!")
     except Exception as e:
-        print(f"[DB] db_complete_log error: {e}")
+        logger.error(f"[DB] db_complete_log error: {e}")
     finally:
         if db: db.close()
 
@@ -273,7 +302,7 @@ def db_add_plc_comm(uid: str, state: str) -> bool:
         db.commit()
         return True
     except Exception as e:
-        print(f"[DB] db_update_plc_comm error: {e}")
+        logger.error(f"[DB] db_update_plc_comm error: {e}")
         return False
     finally:
         if db: db.close()
@@ -298,7 +327,7 @@ def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual:
         db.commit()
         return True
     except Exception as e:
-        print(f"[DB] db_update_plc_comm error: {e}")
+        logger.error(f"[DB] db_update_plc_comm error: {e}")
         return False
     finally:
         if db: db.close()
@@ -357,6 +386,7 @@ class Manager:
         # AI Model initialization
         if initialize_ai_model():
             self.ai_model = True
+            logger.debug("[MANAGER] Warning: AI Model initialized")
             print("[MANAGER] Warning: AI Model initialized")
         
         # Sampling position index tracker
@@ -451,6 +481,7 @@ class Manager:
                 result = confirm_auger_position(images[0], images[1], target_area)
                 confirmations.append(result)
                 print(f"[MANAGER] Loop 1 Result: {'PASS' if result else 'FAIL'}")
+                if result: return True  # If original position is correct, no need to continue loops
             else:
                 print("[MANAGER] Loop 1: Image capture failed")
                 confirmations.append(False)
@@ -466,6 +497,7 @@ class Manager:
                 result = confirm_auger_position(images[0], images[1], target_area)
                 confirmations.append(result)
                 print(f"[MANAGER] Loop 2 Result: {'PASS' if result else 'FAIL'}")
+                if result: return True  # If original position is correct, no need to continue loops
             else:
                 confirmations.append(False)
             
@@ -484,6 +516,7 @@ class Manager:
                 result = confirm_auger_position(images[0], images[1], target_area)
                 confirmations.append(result)
                 print(f"[MANAGER] Loop 3 Result: {'PASS' if result else 'FAIL'}")
+                if result: return True  # If original position is correct, no need to continue loops
             else:
                 confirmations.append(False)
             
@@ -502,6 +535,7 @@ class Manager:
                 result = confirm_auger_position(images[0], images[1], target_area)
                 confirmations.append(result)
                 print(f"[MANAGER] Loop 4 Result: {'PASS' if result else 'FAIL'}")
+                if result: return True  # If original position is correct, no need to continue loops
             else:
                 confirmations.append(False)
             
@@ -520,6 +554,7 @@ class Manager:
                 result = confirm_auger_position(images[0], images[1], target_area)
                 confirmations.append(result)
                 print(f"[MANAGER] Loop 5 Result: {'PASS' if result else 'FAIL'}")
+                if result: return True  # If original position is correct, no need to continue loops
             else:
                 confirmations.append(False)
             
@@ -578,6 +613,7 @@ class Manager:
 
     def _handle_db_check(self):
         msg = self._pop("camera/status")
+
         if msg and msg.get("action") == "cam2_done":
             print("[MANAGER] CAM2 captured — checking for vehicle front …")
             # TODO: Get image and run AI check
@@ -586,7 +622,7 @@ class Manager:
         valid_rfid, vehicle = self._resolve_rfid(self.rfids)
         
         if vehicle:
-            print(f"[MANAGER] Vehicle found in DB: {vehicle}")
+            print(f"[MANAGER] Vehicle found in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
             self.vehicle = vehicle
             
             if db_vehicle_already_in_front("|".join(self.rfids)):
@@ -618,7 +654,7 @@ class Manager:
         valid_rfid, vehicle = self._resolve_rfid(self.rfids)
 
         if vehicle:
-            print(f"[MANAGER] Vehicle now in DB: {vehicle}")
+            print(f"[MANAGER] Vehicle now in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
             self.vehicle = vehicle
             self._goto(State.OPEN_BARRIER)
 
@@ -626,6 +662,12 @@ class Manager:
         print("[MANAGER] Sending open barrier command …")
         self._barrier(action="open_barrier")
         self._cam(action="sample_capture_start", uid=self.uid)
+        
+        vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
+        vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
+        qr_path = generate_qr_code(vendor_name, vehicle_number, self.uid, self.paths["QR_CODE_PATH"])
+        print(f"[MANAGER] QR code generated at {qr_path}")
+        
         self._goto(State.BARRIER_OPENING)
 
     def _handle_barrier_opening(self):
@@ -644,14 +686,16 @@ class Manager:
     def _handle_set_bucket(self):
         bucket_no = int(self.vehicle.get("BUCKET_NO", 1))
         print(f"[MANAGER] Setting bucket to {bucket_no} …")
+        logger.debug(f"[MANAGER] Setting bucket to {bucket_no} …")
         self._barrier(action="set_bucket", bucket_no=bucket_no)
         
         # Wait for bucket confirmation
-        deadline = time.time() + 60
-        while time.time() < deadline:
+        now = time.time()
+        while (time.time() - now) < SET_BUCKET_WAIT_TIMEOUT:
             msg = self._pop("plc_barrier/status")
             if msg and msg.get("status") == "bucket_set":
                 print(f"[MANAGER] Bucket {bucket_no} confirmed.")
+                logger.debug(f"[MANAGER] Bucket {bucket_no} confirmed.")
                 self._goto(State.VEHICLE_PLACEMENT)
                 return
             time.sleep(0.1)
@@ -666,14 +710,14 @@ class Manager:
         if not msg or msg.get("status") == "truck_not_present":
             print("[MANAGER] Waiting for truck presence …")
             self._barrier(action="check_truck")
-            time.sleep(2)
+            time.sleep(3)
             return
         
         if msg.get("status") == "truck_present":
             print("[MANAGER] Truck placement confirmed.")
             # Check for AUTO/MANUAL signal
             self._sampler(action="auto_manual")
-            time.sleep(2)  # Give PLC time to update status
+            time.sleep(3)  # Give PLC time to update status
             msg = self._pop("plc_sampler/status")
             auto_manual_status = msg.get("status", True)
             if auto_manual_status == "auto_manual_off":
@@ -685,6 +729,8 @@ class Manager:
                 return
             
             # Set red signal
+            db_update_plc_comm(self.uid, self.state.name)
+            time.sleep(2)
             self._barrier(action="red_signal")
             self._goto(State.RED_SIGNAL)
         else:
@@ -793,9 +839,8 @@ class Manager:
             self._goto(State.CYCLE_CAPTURE)
 
     def _handle_cycle_capture(self):
-        """Start sampling cycle"""
-        # Check for emergency stop before starting cycle
         msg = self._pop("plc_sampler/status")
+        time.sleep(2)
 
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
@@ -807,13 +852,11 @@ class Manager:
         if msg and msg.get("status") == "cycle_start_given":
             print("[MANAGER] Cycle start given and recieved !!")
             self._sampler(action="check_sample_cycle_complete")
-            self._goto(State.CYCLE_DONE)
-            return
 
         self._goto(State.CYCLE_DONE)
 
     def _handle_cycle_done(self):
-        """Wait for sampling cycle completion"""
+        time.sleep(3)
 
         msg = self._pop("plc_sampler/status")
         if msg and msg.get("status") == "emergency_stop":
@@ -831,7 +874,7 @@ class Manager:
             
             if self._successful_cycles >= TOTAL_CYCLES:
                 print(f"[MANAGER] All {TOTAL_CYCLES} successful cycles completed.")
-                time.sleep(30)  # Ensure PLC has time to update status
+                time.sleep(10)  # Ensure PLC has time to update status
                 self._sampler(action="check_all_samples_status")
                 self._goto(State.SAMPLE_COLLECTION)
             else:
@@ -852,7 +895,7 @@ class Manager:
         else:
             print("[MANAGER] Cycle inrpogress — waiting …")
             self._sampler(action="check_sample_cycle_complete")
-            time.sleep(5)
+            time.sleep(3)
             
     def _handle_all_samples_collection(self):
         """Start sampling cycle"""
@@ -880,6 +923,7 @@ class Manager:
 
     def _handle_cycle_emergency_wait(self):
         print("[MANAGER] Waiting for emergency stop clearance on Sampler PLC …")
+        time.sleep(5)  # Poll every 5 seconds
         
         msg = self._pop("plc_sampler/status")
         if not msg:
@@ -888,6 +932,7 @@ class Manager:
         status = msg.get("status", "")
         # Emergency stop cleared - resume to CYCLE_CONFIRM and reset cycles
         if status == "emergency_cleared":
+            db_update_plc_comm(self.uid, "VEHICLE_PLACEMENT")
             self._barrier(action="check_truck")
             print("[MANAGER] Emergency stop cleared. Resuming operation …")
             
@@ -904,11 +949,6 @@ class Manager:
 
         if msg and msg.get("status") == "sample_cycle_stop_comp": 
             print(f"[MANAGER] Sampling complete — generating QR code …")
-        
-            vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
-            vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
-            qr_path = generate_qr_code(vendor_name, vehicle_number, self.uid, self.paths["QR_CODE_PATH"])
-            print(f"[MANAGER] QR code generated at {qr_path}")
             
             # Set green signal
             self._barrier(action="green_signal")

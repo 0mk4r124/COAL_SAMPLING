@@ -2,12 +2,11 @@ import cv2
 import os
 import qrcode
 import traceback
-from datetime import datetime
-from DEPENDANT.INFERENCE import MASKRCNN
-from LOGGING_CONFIG import initializeLogger
 
-# Initialize logger
-logger = initializeLogger("LOGIC")
+from datetime import datetime
+
+from DEPENDANT.INFERENCE import MASKRCNN
+from DEPENDANT.LOGGING import initializeLogger
 
 # AI Model Initialization 
 BASE_DIR = 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/'
@@ -15,6 +14,10 @@ MODEL_CONFIG_PATH = BASE_DIR + 'MODEL/configs/COCO-InstanceSegmentation/mask_rcn
 MODEL_PATH = BASE_DIR + 'MODEL/COAL_SAMPLING_27MAR/'
 MODEL_FILE = 'model_final.pth'
 CLASS_JSON = BASE_DIR + 'MODEL/COAL_SAMPLING_27MAR/COAL_SAMPLING_27MAR.json'
+LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
+
+# Initialize logger
+logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
 _inference_model = None
 
@@ -269,7 +272,11 @@ def _validate_cam1_region(image_path: str) -> bool:
                 logger.debug(f"CAM1: '{class_name}' detected but outside region (confidence: {score:.2f})")
         
         # cv2.imwrite("test.jpg", vis_img)
+        logger.debug(f"{image_path.split('.')[0]}_masked.jpg")
+        logger.debug(f"{labellist}")
         cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
+        logger.debug(f"{image_path.split('.')[0]}_masked.jpg")
+        logger.debug(f"{labellist}")
         
         # Result: Pass only if NO forbidden objects overlap the region
         if has_forbidden_objects:
@@ -405,7 +412,11 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
             cv2.circle(vis_img, reference_point, 8, (255, 165, 0), -1)
         
         # cv2.imwrite("test.jpg", vis_img)
+        logger.debug(f"{image_path.split('.')[0]}_masked.jpg")
+        logger.debug(f"{labellist}")
         cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
+        logger.debug(f"{image_path.split('.')[0]}_masked.jpg")
+        logger.debug(f"{labellist}")
         
         # ─── Validate Reference Point Inside Coal Area ───────────────────────
         coal_x_min = coal_area_bbox['x_min']

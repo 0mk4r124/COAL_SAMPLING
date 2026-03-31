@@ -3,10 +3,12 @@ import traceback
 
 from DEPENDANT.SNAP7 import PLCCOMMINCATION
 from DEPENDANT.MQTT import MQTT
-from LOGGING_CONFIG import initializeLogger
+from DEPENDANT.LOGGING import initializeLogger
+
+LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
 
 # Initialize logger
-logger = initializeLogger("PLC_SAMPLER")
+logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
 PLC_IP = "192.168.1.1"
 

@@ -5,10 +5,12 @@ import traceback
 from datetime import datetime
 
 from DEPENDANT.MQTT import MQTT
-from LOGGING_CONFIG import initializeLogger
+from DEPENDANT.LOGGING import initializeLogger
+
+LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
 
 # Initialize logger
-logger = initializeLogger("RFID_READER")
+logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
 TCP_IP = "192.168.1.200"
 TCP_PORT = 100

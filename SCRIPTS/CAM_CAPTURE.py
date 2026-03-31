@@ -7,13 +7,14 @@ from datetime import datetime
 
 from DEPENDANT.IP   import IPCamera
 from DEPENDANT.MQTT import MQTT
-from LOGGING_CONFIG import initializeLogger
-
-# Initialize logger
-logger = initializeLogger("CAM_CAPTURE")
+from DEPENDANT.LOGGING import initializeLogger
 
 TEMP_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
 RAW_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RAW_IMG/"
+LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
+
+# Initialize logger
+logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
 CAM_CONFIGS = {
     "CAM1": {"ip": "192.168.1.201", "user": "admin", "password": "insightzz@123", "name": "CAM1"},
