@@ -5,44 +5,44 @@ import traceback
 
 from datetime import datetime
 
-from DEPENDANT.INFERENCE import MASKRCNN
+# from DEPENDANT.INFERENCE import MASKRCNN
 from DEPENDANT.LOGGING import initializeLogger
 
 # AI Model Initialization 
-BASE_DIR = 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/'
+BASE_DIR = '/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/'
 MODEL_CONFIG_PATH = BASE_DIR + 'MODEL/configs/COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml'
 MODEL_PATH = BASE_DIR + 'MODEL/COAL_SAMPLING_27MAR/'
 MODEL_FILE = 'model_final.pth'
 CLASS_JSON = BASE_DIR + 'MODEL/COAL_SAMPLING_27MAR/COAL_SAMPLING_27MAR.json'
-LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
+LOGS_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/LOGS/"
 
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
 _inference_model = None
 
-def initialize_ai_model():
-    """
-    Initialize the AI model for inference.
-    Returns True if successful, False otherwise.
-    """
-    global _inference_model
-    try:
-        _inference_model = MASKRCNN(
-            'Coal',
-            MODEL_CONFIG_PATH,
-            MODEL_PATH,
-            MODEL_FILE,
-            0.5,
-            CLASS_JSON,
-            debugMode=False
-        )
-        logger.info("AI Model initialized successfully")
-        return True
-    except Exception as e:
-        logger.error(f"AI Model initialization failed: {e}", exc_info=True)
-        print(f"ERROR: AI Model initialization failed: {e}")
-        return False
+# def initialize_ai_model():
+#     """
+#     Initialize the AI model for inference.
+#     Returns True if successful, False otherwise.
+#     """
+#     global _inference_model
+#     try:
+#         _inference_model = MASKRCNN(
+#             'Coal',
+#             MODEL_CONFIG_PATH,
+#             MODEL_PATH,
+#             MODEL_FILE,
+#             0.5,
+#             CLASS_JSON,
+#             debugMode=False
+#         )
+#         logger.info("AI Model initialized successfully")
+#         return True
+#     except Exception as e:
+#         logger.error(f"AI Model initialization failed: {e}", exc_info=True)
+#         print(f"ERROR: AI Model initialization failed: {e}")
+#         return False
 
 def check_vehicle_front_present(image) -> bool:
     """
@@ -487,7 +487,7 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         
         qr_img = qr.make_image(fill_color="black", back_color="white")
         
-        os.makedirs(save_path, exist_ok=True)
+        os.makedirs("".join(save_path.split("/")[:-1]), exist_ok=True)
         qr_img.save(save_path)
         
         logger.info(f"QR code generated: {save_path}")
@@ -498,9 +498,10 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         return ""
 
 if __name__ == "__main__":
+    generate_qr_code("OMKAR", "1234", "345", "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/TEST_QR.png")
     # Test initialization
-    if initialize_ai_model():
-        logger.info("AI Model ready for use")
-    else:
-        logger.error("Failed to initialize AI Model", exc_info=True)
-        print("ERROR: Failed to initialize AI Model")
+    # if initialize_ai_model():
+    #     logger.info("AI Model ready for use")
+    # else:
+    #     logger.error("Failed to initialize AI Model", exc_info=True)
+    #     print("ERROR: Failed to initialize AI Model")
