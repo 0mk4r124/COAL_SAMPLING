@@ -5,7 +5,7 @@ import traceback
 
 from datetime import datetime
 
-# from DEPENDANT.INFERENCE import MASKRCNN
+from DEPENDANT.INFERENCE import MASKRCNN
 from DEPENDANT.LOGGING import initializeLogger
 
 # AI Model Initialization 
@@ -21,28 +21,28 @@ logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
 _inference_model = None
 
-# def initialize_ai_model():
-#     """
-#     Initialize the AI model for inference.
-#     Returns True if successful, False otherwise.
-#     """
-#     global _inference_model
-#     try:
-#         _inference_model = MASKRCNN(
-#             'Coal',
-#             MODEL_CONFIG_PATH,
-#             MODEL_PATH,
-#             MODEL_FILE,
-#             0.5,
-#             CLASS_JSON,
-#             debugMode=False
-#         )
-#         logger.info("AI Model initialized successfully")
-#         return True
-#     except Exception as e:
-#         logger.error(f"AI Model initialization failed: {e}", exc_info=True)
-#         print(f"ERROR: AI Model initialization failed: {e}")
-#         return False
+def initialize_ai_model():
+    """
+    Initialize the AI model for inference.
+    Returns True if successful, False otherwise.
+    """
+    global _inference_model
+    try:
+        _inference_model = MASKRCNN(
+            'Coal',
+            MODEL_CONFIG_PATH,
+            MODEL_PATH,
+            MODEL_FILE,
+            0.5,
+            CLASS_JSON,
+            debugMode=False
+        )
+        logger.info("AI Model initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"AI Model initialization failed: {e}", exc_info=True)
+        print(f"ERROR: AI Model initialization failed: {e}")
+        return False
 
 def check_vehicle_front_present(image) -> bool:
     """
@@ -175,120 +175,93 @@ def confirm_auger_position(cam1_image_path: str, cam2_image_path: str, target_ar
 
 def _validate_cam1_region(image_path: str) -> bool:
     """
-    Validate that ONLY COAL and TRUCK_BODY objects overlap with the region of interest.
+    Check if the yellow region (bottom-middle box) is 100% inside 
+    the union of COAL and TRUCK_BODY detections (green areas).
     
-    The region box contains the auger placement area. We want to ensure that within this
-    region, there are no unwanted objects - only COAL and optionally TRUCK_BODY.
-    
-    Logic:
-        1. Define region of interest (bottom-middle box)
-        2. For each detected object, check if it overlaps with the region
-        3. Only allow COAL and TRUCK_BODY objects to overlap
-        4. If ANY other object overlaps the region, return False
-        5. If only COAL/TRUCK_BODY overlap (or no overlap at all), return True
-    
-    Returns:
-        True if region contains only COAL/TRUCK_BODY (allowed objects)
-        False if any other object type overlaps the region
+    Returns True only if yellow box is completely covered by COAL or TRUCK_BODY.
     """
     try:
         image = cv2.imread(image_path)
         if image is None:
-            logger.error(f"Failed to read CAM1 image: {image_path}", exc_info=True)
-            print(f"ERROR: Failed to read CAM1 image: {image_path}")
+            logger.error(f"Failed to read CAM1 image: {image_path}")
             return False
         
         vis_img = image.copy()
         height, width = image.shape[:2]
-        logger.debug(f"CAM1 Image dimensions: {width}x{height}")
         
-        # Define bottom-middle region bounds (region of interest for auger placement)
-        x_start = int(width * 0.35)      # 35% from left
-        x_end = int(width * 0.65)        # 65% from left
-        y_start = int(height * 0.50)     # 50% from top
-        y_end = int(height * 0.80)       # 80% from top
+        # Define Yellow Box (Region of Interest)
+        y_x1 = int(width * 0.35)
+        y_x2 = int(width * 0.65)
+        y_y1 = int(height * 0.50)
+        y_y2 = int(height * 0.80)
         
-        region_width = x_end - x_start
-        region_height = y_end - y_start
+        region_w = y_x2 - y_x1
+        region_h = y_y2 - y_y1
         
-        logger.debug(f"CAM1: Region of interest x=[{x_start}-{x_end}], y=[{y_start}-{y_end}]")
-        logger.debug(f"CAM1: Region size: {region_width}x{region_height}")
-        cv2.rectangle(vis_img, (x_start, y_start), (x_end, y_end), (0, 255, 255), 3)
+        logger.debug(f"CAM1 Yellow Box: x=[{y_x1}-{y_x2}], y=[{y_y1}-{y_y2}]")
         
-        # Run inference on full image
+        # Draw Yellow Box
+        cv2.rectangle(vis_img, (y_x1, y_y1), (y_x2, y_y2), (0, 255, 255), 4)
+        
+        # Run AI inference
         masked_img, labellist = _inference_model.run_inference(image)
-        cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
         
         if not labellist:
-            logger.info("CAM1: No objects detected - region is clear")
-            cv2.imwrite("test.jpg", vis_img)
-            return True
+            logger.warning("CAM1: No objects detected")
+            cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
+            return False
         
-        # Allowed object types in the region
         allowed_classes = {"COAL", "TRUCK_BODY"}
         
-        # Check each detection for overlap with region
-        has_coal_or_truck = False
-        has_forbidden_objects = False
-        forbidden_objects_in_region = []
+        # We'll collect the union of all allowed green boxes
+        green_boxes = []   # list of (x1, y1, x2, y2)
         
         for detection in labellist:
             if len(detection) < 6:
                 continue
-            
-            # Detection format: (score, y_min, y_max, x_min, x_max, class_name, ...)
-            y_min = int(detection[1])
-            y_max = int(detection[2])
-            x_min = int(detection[3])
-            x_max = int(detection[4])
-            class_name = detection[5]
-            score = detection[0]
-            
-            # Check if bounding box overlaps with region
-            overlap_x_min = max(x_min, x_start)
-            overlap_x_max = min(x_max, x_end)
-            overlap_y_min = max(y_min, y_start)
-            overlap_y_max = min(y_max, y_end)
-            
-            has_overlap = (overlap_x_min < overlap_x_max) and (overlap_y_min < overlap_y_max)
-            
-            if has_overlap:
-                overlap_area = (overlap_x_max - overlap_x_min) * (overlap_y_max - overlap_y_min)
                 
-                if class_name in allowed_classes:
-                    # Draw in green for allowed objects
-                    cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-                    has_coal_or_truck = True
-                    logger.debug(f"CAM1: ALLOWED '{class_name}' overlaps region - area: {overlap_area}px (confidence: {score:.2f})")
-                else:
-                    # Draw in red for forbidden objects
-                    cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (0, 0, 255), 2)
-                    has_forbidden_objects = True
-                    forbidden_objects_in_region.append((class_name, score, overlap_area))
-                    logger.warning(f"CAM1: FORBIDDEN '{class_name}' overlaps region - area: {overlap_area}px (confidence: {score:.2f})")
-            else:
-                # Object detected but doesn't overlap region - draw in cyan
-                cv2.rectangle(vis_img, (x_min, y_min), (x_max, y_max), (255, 255, 0), 1)
-                logger.debug(f"CAM1: '{class_name}' detected but outside region (confidence: {score:.2f})")
+            class_name = detection[5]
+            if class_name not in allowed_classes:
+                continue  # ignore other classes
+                
+            x1 = int(detection[3])
+            y1 = int(detection[1])
+            x2 = int(detection[4])
+            y2 = int(detection[2])
+            
+            green_boxes.append((x1, y1, x2, y2))
+            cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 3)  # Green for allowed
         
-        # cv2.imwrite("test.jpg", vis_img)
-        logger.debug(f"{image_path.split('.')[0]}_masked.jpg")
-        logger.debug(f"{labellist}")
-        cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
-        logger.debug(f"{image_path.split('.')[0]}_masked.jpg")
-        logger.debug(f"{labellist}")
-        
-        # Result: Pass only if NO forbidden objects overlap the region
-        if has_forbidden_objects:
-            logger.warning(f"CAM1: VALIDATION FAILED - Forbidden objects in region: {forbidden_objects_in_region}")
+        if not green_boxes:
+            logger.warning("CAM1: No COAL or TRUCK_BODY detected")
+            cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", vis_img)
             return False
-        else:
-            logger.info(f"CAM1: VALIDATION PASSED - Region contains only allowed objects or is clear")
+        
+        # Check if Yellow box is completely inside ANY of the green boxes
+        # (or inside the union - we check against each green box)
+        fully_covered = False
+        
+        for gx1, gy1, gx2, gy2 in green_boxes:
+            if (y_x1 >= gx1 and y_x2 <= gx2 and 
+                y_y1 >= gy1 and y_y2 <= gy2):
+                fully_covered = True
+                logger.info(f"CAM1: Yellow box is 100% inside green box {class_name}")
+                break
+        
+        # Save visualization
+        output_path = f"{image_path.split('.')[0]}_masked.jpg"
+        cv2.imwrite(output_path, vis_img)
+        
+        if fully_covered:
+            logger.info("CAM1: VALIDATION PASSED - Yellow box is completely inside green area")
             return True
-    
+        else:
+            logger.warning("CAM1: VALIDATION FAILED - Yellow box is NOT fully inside any green box")
+            return False
+            
     except Exception as e:
         logger.error(f"Error in CAM1 validation: {e}", exc_info=True)
-        print(f"ERROR: Error in CAM1 validation: {e}")
+        print(f"ERROR: CAM1 validation error: {e}")
         return False
 
 def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
@@ -354,6 +327,10 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
                 auger_detection = detection
                 logger.debug(f"CAM2: AUGER detected (bbox: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
             
+            elif class_name == "AUGER_FRAME":
+                auger_frame_detection = detection
+                logger.debug(f"CAM2: AUGER_FRAME detected (bbox: x=[{x_min}-{x_max}], y=[{y_min}-{y_max}], confidence: {score:.2f})")
+            
             elif class_name == target_coal_label:
                 coal_area_bbox = {
                     'x_min': x_min, 'x_max': x_max,
@@ -391,9 +368,12 @@ def _validate_cam2_auger(image_path: str, target_area_num: int) -> bool:
         # Fallback: If AUGER_BOTTOM unavailable, use center of AUGER bottom edge
         if reference_point is None:
             if auger_detection is None:
-                logger.error("CAM2: Neither AUGER_BOTTOM nor AUGER detected", exc_info=True)
-                print(f"ERROR: CAM2: Neither AUGER_BOTTOM nor AUGER detected")
-                return False
+                if auger_frame_detection is None:
+                    logger.error("CAM2: Neither AUGER_BOTTOM nor AUGER detected", exc_info=True)
+                    print(f"ERROR: CAM2: Neither AUGER_BOTTOM nor AUGER detected")
+                    return False
+                else:
+                    auger_detection = auger_frame_detection
             
             # Extract AUGER bounding box
             y_min = int(auger_detection[1])
@@ -498,10 +478,10 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         return ""
 
 if __name__ == "__main__":
-    generate_qr_code("OMKAR", "1234", "345", "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/TEST_QR.png")
+    # generate_qr_code("OMKAR", "1234", "345", "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/TEST_QR.png")
     # Test initialization
-    # if initialize_ai_model():
-    #     logger.info("AI Model ready for use")
-    # else:
-    #     logger.error("Failed to initialize AI Model", exc_info=True)
-    #     print("ERROR: Failed to initialize AI Model")
+    if initialize_ai_model():
+        logger.info("AI Model ready for use")
+    else:
+        logger.error("Failed to initialize AI Model", exc_info=True)
+        print("ERROR: Failed to initialize AI Model")
