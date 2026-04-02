@@ -44,78 +44,52 @@ LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
-def get_sample_positions(num_points=3):
-    # Area groups
-    area_groups = [
-        [1, 2],
-        [3, 4],
-        [5, 6]
-    ]
+def get_sample_positions(used_areas=None):
+    if used_areas is None:
+        used_areas = []
 
-    # Flip mapping (1 <-> 6, 2 <-> 5, 3 <-> 4)
-    def flip_area(a):
-        return 7 - a
+    # Define all possible areas
+    all_areas = set(range(1, 4))
+    available_areas = list(all_areas - set(used_areas))
+
+    if not available_areas:
+        print("All areas are already used")
+        return None
+
+    # Pick random available area
+    area = random.choice(available_areas)
 
     # Global bounds
     x_min, x_max = 40, 100
     y_min, y_max = 40, 70
 
+    # Grid split
     x_splits = 3
-    y_splits = 2
+    y_splits = 1
 
-    width = x_max - x_min
-    min_x_gap = 15
-
-    x_step = width / x_splits
+    x_step = (x_max - x_min) / x_splits
     y_step = (y_max - y_min) / y_splits
 
-    selected_points = []
-    used_groups = []
+    # Map area → grid index
+    row = (area - 1) // x_splits
+    col = (area - 1) % x_splits
 
-    # Shuffle groups to add randomness in selection order
-    random.shuffle(area_groups)
+    # Cell bounds
+    x_start = x_min + col * x_step
+    x_end = x_start + x_step
 
-    for group in area_groups:
-        # Pick one area from the pair
-        raw_area = random.choice(group)
-        area = flip_area(raw_area)
+    y_start = y_min + row * y_step
+    y_end = y_start + y_step
 
-        # Grid mapping
-        row = (area - 1) // x_splits
-        col = (area - 1) % x_splits
+    # Uniform integer sampling
+    x = random.randint(int(x_start)+5, int(x_end) - 5)
+    y = random.randint(int(y_start), int(y_end) - 1)
 
-        # Cell bounds
-        x_start = x_min + col * x_step
-        x_end = x_start + x_step
-
-        y_start = y_min + row * y_step
-        y_end = y_start + y_step
-
-        # Center for controlled X
-        x_center = (x_start + x_end) / 2
-
-        max_attempts = 30
-
-        for _ in range(max_attempts):
-            # Controlled X (not too random)
-            x = int(x_center + random.uniform(-x_step * 0.25, x_step * 0.25))
-            x = max(int(x_start), min(x, int(x_end) - 1))
-
-            # Fully random Y within region
-            y = random.randint(int(y_start), int(y_end) - 1)
-
-            # Enforce X distance constraint
-            if all(abs(x - p["x"]) >= min_x_gap for p in selected_points):
-                selected_points.append({
-                    "x": x,
-                    "y": y,
-                    "area": area
-                })
-                break
-        else:
-            raise ValueError("Could not satisfy X-distance constraint")
-
-    return selected_points
+    return {
+        "x": x,
+        "y": y,
+        "area": area
+    }
 
 # ── State machine ─────────────────────────────────────────────────────────────
 class State(Enum):
@@ -801,7 +775,11 @@ class Manager:
         
         # Get sample positions
         areas = [p["area"] for p in self.positions]
-        self.positions.append(get_sample_positions(areas))
+        target_area = get_sample_positions(areas)
+        if target_area is not None: self.positions.append(target_area)
+        else:
+            target_area = get_sample_positions()
+            self.positions.append(target_area)
         print(f"[MANAGER] Sampling positions: {self.positions}")
         
         pos = self.positions[self._current_sample_index]
