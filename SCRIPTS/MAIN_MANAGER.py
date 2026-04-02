@@ -49,11 +49,12 @@ def get_sample_positions(used_areas=None):
         used_areas = []
 
     # Define all possible areas
-    all_areas = set(range(1, 7))
+    all_areas = set(range(1, 4))
     available_areas = list(all_areas - set(used_areas))
 
     if not available_areas:
-        raise ValueError("All areas are already used")
+        print("All areas are already used")
+        return None
 
     # Pick random available area
     area = random.choice(available_areas)
@@ -774,7 +775,11 @@ class Manager:
         
         # Get sample positions
         areas = [p["area"] for p in self.positions]
-        self.positions.append(get_sample_positions(areas))
+        target_area = get_sample_positions(areas)
+        if target_area is not None: self.positions.append(target_area)
+        else:
+            target_area = get_sample_positions()
+            self.positions.append(target_area)
         print(f"[MANAGER] Sampling positions: {self.positions}")
         
         pos = self.positions[self._current_sample_index]
