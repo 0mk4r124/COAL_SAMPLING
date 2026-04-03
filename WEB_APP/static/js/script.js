@@ -56,7 +56,33 @@ function handleBlockingState(data) {
     if (data.status === "blocked") {
         if (!waitModalOpen) {
             waitModalOpen = true;
+function fetchVehicleMaster() {
+    fetch('/api/vehicle_master/')
+        .then(res => res.json())
+        .then(data => {
+            const tbody = document.getElementById('vehicleMasterBody');
+            tbody.innerHTML = '';
 
+            data.data.forEach(row => {
+                const tr = document.createElement('tr');
+
+                tr.innerHTML = `
+                    <td>${row.rfid}</td>
+                    <td>${row.vehicle_number}</td>
+                    <td>${row.vendor_name}</td>
+                    <td>${row.vendor_code}</td>
+                    <td>
+                        <button class="btn btn-sm btn-warning"
+                            onclick='openEditModal(${JSON.stringify(row)})'>
+                            Edit
+                        </button>
+                    </td>
+                `;
+
+                tbody.appendChild(tr);
+            });
+        });
+}
             const message = document.getElementById('waitModalMessage');
 
             if (data.reason === "EMERGENCY_ACTIVE") {
@@ -228,6 +254,73 @@ wrapper.addEventListener("mouseup", () => {
 wrapper.addEventListener("mouseleave", () => {
     isDragging = false;
 });
+
+function downloadHistoryData() {
+    const dateRange = document.getElementById('date_range').value;
+
+    if (!dateRange) {
+        alert("Please select a date range");
+        return;
+    }
+
+    let startDate, endDate;
+
+    if (dateRange.includes(" - ")) {
+        [startDate, endDate] = dateRange.split(" - ").map(s => s.trim());
+    } else {
+        startDate = endDate = dateRange.trim();
+    }
+
+    const vehicleNumber = document.getElementById('vehicle_number_search').value.trim();
+    const vendorName = document.getElementById('vendor_name_search').value.trim();
+
+    let url = `/api/download_history_data/?start_date=${startDate}&end_date=${endDate}`;
+
+    if (vehicleNumber) {
+        url += `&vehicle_number=${encodeURIComponent(vehicleNumber)}`;
+    }
+
+    if (vendorName) {
+        url += `&vendor_name=${encodeURIComponent(vendorName)}`;
+    }
+
+    window.open(url, '_blank');
+}
+
+function fetchVehicleMaster(page=1) {
+    fetch(`/api/vehicle_master/?page=${page}`)
+        .then(res => res.json())
+        .then(data => {
+            const tbody = document.getElementById('vehicleMasterBody');
+            tbody.innerHTML = '';
+
+            data.data.forEach(row => {
+                const tr = document.createElement('tr');
+
+                tr.innerHTML = `
+                    <td>${row.rfid}</td>
+                    <td>${row.vehicle_number}</td>
+                    <td>${row.vendor_name}</td>
+                    <td>${row.vendor_code}</td>
+                    <td>
+                        <button class="btn btn-sm btn-warning"
+                            onclick='openEditModal(${JSON.stringify(row)})'>
+                            Edit
+                        </button>
+                    </td>
+                `;
+
+                tbody.appendChild(tr);
+            });
+
+            setupPagination(
+                data.total,
+                data.page,
+                data.per_page,
+                "vehicle_master"
+            );
+        });
+}
 
 document.addEventListener("DOMContentLoaded", function () {
     // Initialize daterangepicker with default last 7 days
@@ -409,8 +502,78 @@ function renderPagination(pagination, tab) {
         link.addEventListener("click", function (e) {
             e.preventDefault();
             const page = parseInt(this.getAttribute("data-page"));
-            if (tab === 'history') {if (!isNaN(page)) fetchHistoryData(page);}
+            if (tab === 'history') {
+                if (!isNaN(page)) fetchHistoryData(page);
+            }
+            if (tab === 'vehicle_master') {
+                if (!isNaN(page)) fetchVehicleMaster(page);
+            }
         });
+    });
+}
+
+function downloadVehicleMaster() {
+    window.open('/api/download_vehicle_master/', '_blank');
+}
+
+function openEditModal(data) {
+    document.getElementById('edit_rfid').value = data.rfid;
+    document.getElementById('edit_vehicle_number').value = data.vehicle_number;
+    document.getElementById('edit_vendor_name').value = data.vendor_name;
+    document.getElementById('edit_vendor_code').value = data.vendor_code;
+
+    new bootstrap.Modal(document.getElementById('editVehicleModal')).show();
+}
+
+function submitVehicleEdit() {
+    const payload = {
+        rfid: document.getElementById('edit_rfid').value,
+        vehicle_number: document.getElementById('edit_vehicle_number').value,
+        vendor_name: document.getElementById('edit_vendor_name').value,
+        vendor_code: document.getElementById('edit_vendor_code').value,
+    };
+
+    fetch('/api/edit_vehicle_master/', {
+        method: 'POST',
+        headers: {
+            "X-CSRFToken": csrftoken,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            alert("Updated successfully");
+            fetchVehicleMaster();
+            bootstrap.Modal.getInstance(document.getElementById('editVehicleModal')).hide();
+        } else {
+            alert(res.error);
+        }
+    });
+}
+
+function uploadVehicleMaster() {
+    const data = prompt("Paste JSON data");
+
+    if (!data) return;
+
+    fetch('/api/upload_vehicle_master/', {
+        method: 'POST',
+        headers: {
+            "X-CSRFToken": csrftoken,
+            "Content-Type": "application/json"
+        },
+        body: data
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            alert("Uploaded successfully");
+            fetchVehicleMaster();
+        } else {
+            alert(res.error);
+        }
     });
 }
 
@@ -422,7 +585,6 @@ document.getElementById('submitVehicleDetailsBtn').addEventListener("click", fun
 
     const vendorNameInput = document.getElementById("vendorNameInput").value;
     const vendorCodeInput = document.getElementById("vendorCodeInput").value;
-    const bucketNo = document.getElementById("bucketNoInput").value;
 
     let payload = {
         rfid: rfid,

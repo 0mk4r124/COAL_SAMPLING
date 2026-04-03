@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import csv
 
 from django.contrib.auth.decorators import login_required
 from django.db.models import F, Func, Max, Subquery, OuterRef, Value, DateTimeField, CharField
@@ -76,11 +77,9 @@ def serve_file(request):
             return HttpResponse(f"Error reading file: {str(e)}", status=500)
     else:
         # Return a placeholder response instead of 404
-        return HttpResponse(f"Image file not found on this server: {os.path.basename(file_path)}", 
-                        status=404, content_type='text/plain')
+        return HttpResponse(f"Image file not found on this server: {os.path.basename(file_path)}", status=404, content_type='text/plain')
 
 def live_ip_camera(request):
-    """API endpoint for all 4 IP camera live images"""
     try: 
         camera_paths = [
             "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/CAM1_REDUCED.jpg",
@@ -131,7 +130,6 @@ def add_vehicle(request):
         vehicle_number = data.get("vehicleNumber")
         vendor_name = data.get("vendorName")
         vendor_code = data.get("vendorCode")
-        bucketNo = data.get("bucketNo")
 
         if not rfid or not vehicle_number or not vendor_code:
             return JsonResponse({
@@ -144,7 +142,6 @@ def add_vehicle(request):
             vendor_code=vendor_code,
             defaults={
                 "vendor_name": vendor_name,
-                "bucket_no": bucketNo,
                 "create_time": timezone.now()
             }
         )
@@ -154,13 +151,10 @@ def add_vehicle(request):
         if vendor_name:
             if created:
                 vendor_obj.vendor_name = vendor_name
-                vendor_obj.bucket_no = bucketNo
             else:
                 # Optional: update only if fields empty
                 if not vendor_obj.vendor_name:
                     vendor_obj.vendor_name = vendor_name
-                if not vendor_obj.bucket_no:
-                    vendor_obj.bucket_no = bucketNo
 
             vendor_obj.save()
 
@@ -184,7 +178,6 @@ def add_vehicle(request):
         })
 
     except Exception as e:
-        print(e)
         return JsonResponse({
             "success": False,
             "error": str(e)
@@ -246,7 +239,7 @@ def fetch_history_data(request):
     )
 
     # ---- Main Query ----
-    queryset = VEHICLE_LOGS.objects.filter(
+    queryset = VEHICLE_LOGS.objects.filter(status="COMPLETED").filter(
         create_time__date__gte=start_dt,
         create_time__date__lte=end_dt,
     ).annotate(
@@ -254,7 +247,6 @@ def fetch_history_data(request):
         vendor_code=Subquery(vehicle_master_qs.values('vendor_code')[:1]),
     ).annotate(
         vendor_name=Subquery(vendor_master_qs.values('vendor_name')[:1]),
-        bucket_no=Subquery(vendor_master_qs.values('bucket_no')[:1]),
     ).order_by("create_time")
 
     # ---- Filters (after annotation) ----
@@ -276,7 +268,7 @@ def fetch_history_data(request):
             "sample_1_image": f"/api/serve-file?file={row.sample_1_img_path}" if row.sample_1_img_path else None,
             "sample_2_image": f"/api/serve-file?file={row.sample_2_img_path}" if row.sample_2_img_path else None,
             "sample_3_image": f"/api/serve-file?file={row.sample_3_img_path}" if row.sample_3_img_path else None,
-            "qr_code": f"/api/serve-file?file={row.QR_code_path}" if row.QR_code_path else None,
+            "report_path": row.report_path if row.report_path else None,
             "bucket_no": row.bucket_no,
         })
 
@@ -285,6 +277,199 @@ def fetch_history_data(request):
         "vehicle_number": vehicle_number,
         "vendor_name": vendor_name,
     })
+
+@csrf_exempt
+def download_history_data(request):
+    try:
+        start_date = request.GET.get('start_date')
+        end_date = request.GET.get('end_date')
+        vehicle_number = request.GET.get('vehicle_number')
+        vendor_name = request.GET.get('vendor_name')
+
+        # ---- Date Parsing ----
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        except Exception:
+            return JsonResponse({'error': 'Invalid date format'}, status=400)
+
+        # ---- SAME QUERY AS fetch_history_data ----
+        vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
+            rfid_wrapped=Concat(Value('|'), F('rfid'), Value('|'), output_field=CharField()),
+            rfids_wrapped=Concat(Value('|'), OuterRef('rfids'), Value('|'), output_field=CharField())
+        ).annotate(
+            match=Locate(F('rfid_wrapped'), F('rfids_wrapped'))
+        ).filter(match__gt=0)
+
+        vendor_master_qs = VENDOR_MASTER.objects.filter(
+            vendor_code=OuterRef('vendor_code')
+        )
+
+        queryset = VEHICLE_LOGS.objects.filter(status="COMPLETED").filter(
+            create_time__date__gte=start_dt,
+            create_time__date__lte=end_dt,
+        ).annotate(
+            vehicle_number=Subquery(vehicle_master_qs.values('vehicle_number')[:1]),
+            vendor_code=Subquery(vehicle_master_qs.values('vendor_code')[:1]),
+        ).annotate(
+            vendor_name=Subquery(vendor_master_qs.values('vendor_name')[:1]),
+        ).order_by("create_time")
+
+        if vehicle_number:
+            queryset = queryset.filter(vehicle_number__icontains=vehicle_number)
+
+        if vendor_name:
+            queryset = queryset.filter(vendor_name__icontains=vendor_name)
+
+        # ---- CSV RESPONSE ----
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="history_data.csv"'
+
+        writer = csv.writer(response)
+
+        # Header (same as UI)
+        writer.writerow([
+            "SNo",
+            "Datetime",
+            "Vehicle Number",
+            "Vendor Name",
+            "Vendor Code",
+            "Bucket Number"
+        ])
+
+        for idx, row in enumerate(queryset, start=1):
+            writer.writerow([
+                idx,
+                row.create_time.strftime("%Y-%m-%d %H:%M:%S") if row.create_time else "",
+                row.vehicle_number,
+                row.vendor_name,
+                row.vendor_code,
+                row.bucket_no
+            ])
+
+        return response
+
+    except Exception as e:
+        return HttpResponse(str(e), status=500)
+
+@csrf_exempt
+def vehicle_master(request):
+    try:
+        page = int(request.GET.get("page", 1))
+        per_page = int(request.GET.get("per_page", 10))
+
+        queryset = VEHICLE_MASTER.objects.all().order_by("rfid")
+
+        total = queryset.count()
+        start = (page - 1) * per_page
+        end = start + per_page
+
+        vehicles = queryset[start:end]
+
+        data = []
+        for v in vehicles:
+            vendor = VENDOR_MASTER.objects.filter(vendor_code=v.vendor_code).first()
+
+            data.append({
+                "rfid": v.rfid,
+                "vehicle_number": v.vehicle_number,
+                "vendor_code": v.vendor_code,
+                "vendor_name": vendor.vendor_name if vendor else None
+            })
+
+        return JsonResponse({
+            "data": data,
+            "total": total,
+            "page": page,
+            "per_page": per_page
+        })
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+    
+@csrf_exempt
+def edit_vehicle_master(request):
+    if request.method != "POST":
+        return JsonResponse({"success": False}, status=405)
+
+    try:
+        data = json.loads(request.body)
+
+        rfid = data.get("rfid")
+
+        vehicle = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
+        if not vehicle:
+            return JsonResponse({"success": False, "error": "RFID not found"})
+
+        vehicle.vehicle_number = data.get("vehicle_number")
+        vehicle.vendor_code = data.get("vendor_code")
+        vehicle.save()
+
+        # update vendor
+        vendor, _ = VENDOR_MASTER.objects.update_or_create(
+            vendor_code=data.get("vendor_code"),
+            defaults={"vendor_name": data.get("vendor_name")}
+        )
+
+        return JsonResponse({"success": True})
+
+    except Exception as e:
+        return JsonResponse({"success": False, "error": str(e)})
+    
+@csrf_exempt
+def upload_vehicle_master(request):
+    if request.method != "POST":
+        return JsonResponse({"success": False}, status=405)
+
+    try:
+        rows = json.loads(request.body)
+
+        for row in rows:
+            vendor, _ = VENDOR_MASTER.objects.update_or_create(
+                vendor_code=row["vendor_code"],
+                defaults={"vendor_name": row.get("vendor_name")}
+            )
+
+            VEHICLE_MASTER.objects.update_or_create(
+                rfid=row["rfid"],
+                defaults={
+                    "vehicle_number": row["vehicle_number"],
+                    "vendor_code": row["vendor_code"]
+                }
+            )
+
+        return JsonResponse({"success": True})
+
+    except Exception as e:
+        return JsonResponse({"success": False, "error": str(e)})
+
+@csrf_exempt
+def download_vehicle_master(request):
+    try:
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="vehicle_master.csv"'
+
+        writer = csv.writer(response)
+
+        # Header
+        writer.writerow(["RFID", "Vehicle Number", "Vendor Name", "Vendor Code"])
+
+        vehicles = VEHICLE_MASTER.objects.all().order_by("rfid")
+
+        for v in vehicles:
+            vendor = VENDOR_MASTER.objects.filter(vendor_code=v.vendor_code).first()
+
+            writer.writerow([
+                v.rfid,
+                v.vehicle_number,
+                vendor.vendor_name if vendor else "",
+                v.vendor_code
+            ])
+
+        return response
+
+    except Exception as e:
+        return HttpResponse(str(e), status=500)
 
 @csrf_exempt
 def health_status(request):

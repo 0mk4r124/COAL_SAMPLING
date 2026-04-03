@@ -9,12 +9,13 @@ from DEPENDANT.IP   import IPCamera
 from DEPENDANT.MQTT import MQTT
 from DEPENDANT.LOGGING import initializeLogger
 
-TEMP_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
-RAW_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RAW_IMG/"
-LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
+BASE_DIR = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/"
+TEMP_PATH = BASE_DIR + "TEMP_IMG/"
+RAW_PATH = BASE_DIR + "RAW_IMG/"
+LOGS_PATH = BASE_DIR + "LOGS/"
 
 # Initialize logger
-logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
+logger = initializeLogger("CAM_MANAGER", LOGS_PATH=LOGS_PATH)
 
 CAM_CONFIGS = {
     "CAM1": {"ip": "192.168.1.201", "user": "admin", "password": "insightzz@123", "name": "CAM1"},
@@ -97,6 +98,7 @@ class CamController:
         while self._bg_active:
             try:
                 img = self.cams[cam_name].capture(save=False)
+                if cam_name in ["CAM3", "CAM2"]: img = cv2.flip(img, 1)
                 if img is not None:
                     with self._lock:
                         self._last_frame[cam_name] = img
@@ -110,7 +112,6 @@ class CamController:
                     # Save full resolution
                     # save_frame(img, temp_full_path)
                     # Save 50% reduced resolution for quick loading
-                    if cam_name in ["CAM3", "CAM2"]: img = cv2.flip(img, 1)
                     save_frame_reduced(img, temp_reduced_path, scale=0.5)
                     
                     logger.debug(f"{cam_name} captured: full={temp_full_path}, reduced={temp_reduced_path}")

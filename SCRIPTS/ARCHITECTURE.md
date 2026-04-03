@@ -90,6 +90,7 @@ DB_CHECK  ──────── RFID found ─────────► che
  │ not found                                   ▼
  ▼                                       OPEN_BARRIER
 WAITING_FOR_DB  (poll every 10 s)               │ barrier_opened
+ |                                              | Send QR Data to printer
  │  found                                       ▼
  └─────────────────────────────────────── SET_BUCKET
                                                 │ bucket_set

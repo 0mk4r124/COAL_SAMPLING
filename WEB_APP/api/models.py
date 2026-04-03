@@ -5,11 +5,12 @@ class VEHICLE_LOGS(models.Model):
     id = models.AutoField(db_column='ID', primary_key=True)
     uid = models.CharField(db_column='UID', max_length=50, blank=True, null=True)
     rfids = models.CharField(db_column='RFIDS', max_length=500, blank=True, null=True)
+    bucket_no = models.CharField(db_column='BUCKET_NO', max_length=50, blank=True, null=True)
     vehicle_img_path = models.CharField(db_column='VEHICLE_IMG_PATH', max_length=500, blank=True, null=True)
     sample_1_img_path = models.CharField(db_column='SAMPLE_1_IMG_PATH', max_length=500, blank=True, null=True)
     sample_2_img_path = models.CharField(db_column='SAMPLE_2_IMG_PATH', max_length=500, blank=True, null=True)
     sample_3_img_path = models.CharField(db_column='SAMPLE_3_IMG_PATH', max_length=500, blank=True, null=True)
-    QR_code_path = models.CharField(db_column='QR_CODE_PATH', max_length=500, blank=True, null=True)
+    report_path = models.CharField(db_column='REPORT_PATH', max_length=500, blank=True, null=True)
     status = models.CharField(db_column='STATUS', max_length=20, blank=True, null=True)
     error_message = models.CharField(db_column='ERROR_MESSAGE', max_length=500, blank=True, null=True)
     
@@ -22,6 +23,7 @@ class VEHICLE_LOGS(models.Model):
         indexes = [
             models.Index(fields=["rfids"], name="vl_rfid_idx"),
             models.Index(fields=["create_time"], name="vl_create_time_idx"),
+            models.Index(fields=["create_time", "status", "rfids"], name="vl_fetch_idx"),
         ]
 
 class VEHICLE_MASTER(models.Model):
@@ -48,7 +50,6 @@ class VENDOR_MASTER(models.Model):
     id = models.AutoField(db_column='ID', primary_key=True)
     vendor_code = models.CharField(db_column='VENDOR_CODE', max_length=50, blank=True, null=True)
     vendor_name = models.CharField(db_column='VENDER_NAME', max_length=50, blank=True, null=True)
-    bucket_no = models.CharField(db_column='BUCKET_NO', max_length=50, blank=True, null=True)
     
     create_time = models.DateTimeField(db_column='CREATE_TIME', blank=True, null=True)
 

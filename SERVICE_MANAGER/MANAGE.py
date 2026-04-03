@@ -3,6 +3,7 @@ import os
 import psutil
 import subprocess
 import shlex
+import time
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QTabWidget, QVBoxLayout, QPushButton,
     QPlainTextEdit, QLabel, QHBoxLayout, QMainWindow, QFrame
@@ -10,15 +11,18 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QProcess, QTimer
 from PyQt5.QtGui import QFont
 
+from tendo import singleton
+me = singleton.SingleInstance()
+
 BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
 SERVICES = {
     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
     "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS\\CAM_CAPTURE.py",
+    "Printer": fr"{BASE_FILE_PATH}SCRIPTS\\PRINTER.py",
     "Logic": fr"{BASE_FILE_PATH}SCRIPTS\\MAIN_MANAGER.py",
     "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_BARRIER.py",
     "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_SAMPLER.py",
     "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
-    # "Video Streamer": fr"{BASE_FILE_PATH}SCRIPTS\\VIDEO_STREAMER.py",
     # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
     "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
@@ -36,8 +40,7 @@ CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust
 # PYTHON_EXE = "/home/omkar/INSIGHTZZ/PROJECTS/STANDARD_TEMPLATE/DJANGO_SCRIPTS_FRAMEWORK/venv/bin/python"
 # CHROME_PATH = "/usr/bin/google-chrome"  # Adjust if different
 
-
-def set_status_color(label: QLabel, status: str):
+def set_status_color(label: QLabel, status: str, name: str = ""):
     """Helper to color status labels."""
     if "Running" in status:
         label.setStyleSheet("color: lightgreen; font-weight: bold;")
@@ -47,7 +50,7 @@ def set_status_color(label: QLabel, status: str):
         label.setStyleSheet("color: orange; font-weight: bold;")
     else:
         label.setStyleSheet("color: gray; font-weight: bold;")
-    label.setText(f"Status: {status}")
+    label.setText(f"{name}: {status}")
 
 
 class ServiceTab(QWidget):
@@ -56,6 +59,10 @@ class ServiceTab(QWidget):
         self.name = name
         self.command = command
         self.process = None
+        self.user_requested_stop = False
+
+        # NEW — watchdog timestamp
+        self.last_output_time = None
 
         layout = QVBoxLayout()
 
@@ -63,7 +70,7 @@ class ServiceTab(QWidget):
         top_layout = QHBoxLayout()
         self.disk_label = QLabel("Disk: -- | Free: --")
         self.status_label = QLabel("Status: Inactive")
-        set_status_color(self.status_label, "Inactive")
+        set_status_color(self.status_label, "Inactive", "Status")
         top_layout.addWidget(self.disk_label)
         top_layout.addWidget(self.status_label)
         layout.addLayout(top_layout)
@@ -111,6 +118,14 @@ class ServiceTab(QWidget):
         self.clear_timer.timeout.connect(self.clear_logs)
         self.clear_timer.start(3600 * 1000)  # 1 hour
 
+        # NEW — WATCHDOG TIMER
+        # self.watchdog_timer = QTimer()
+        # self.watchdog_timer.timeout.connect(self.check_output_timeout)
+        # self.watchdog_timer.start(10000)  # check every 10 seconds
+
+        # Auto start services
+        if "Web" not in self.name: self.start_service()
+
     def append_log(self, text: str):
         """Safe append to log area and auto-scroll."""
         if not text:
@@ -119,6 +134,8 @@ class ServiceTab(QWidget):
         self.log_area.verticalScrollBar().setValue(self.log_area.verticalScrollBar().maximum())
 
     def start_service(self):
+        self.user_requested_stop = False
+
         # Prevent double-starts
         if self.process is not None:
             self.append_log("[INFO] Service already running.")
@@ -127,7 +144,7 @@ class ServiceTab(QWidget):
         # Validate python exe
         if not os.path.isfile(PYTHON_EXE) or not os.access(PYTHON_EXE, os.X_OK):
             self.append_log(f"[ERROR] PYTHON_EXE not found or not executable: {PYTHON_EXE}")
-            set_status_color(self.status_label, "Stopped")
+            set_status_color(self.status_label, "Stopped", "Status")
             return
 
         # Create process
@@ -146,10 +163,7 @@ class ServiceTab(QWidget):
         self.process.started.connect(self.process_started)
 
         # Build args safely using shlex.split
-        if self.command.endswith(".py"):
-            args = ["-u", self.command]
-        else:
-            args = ["-u"] + shlex.split(self.command)
+        args = ["-u"] + shlex.split(self.command)
 
         # For Django, set working dir to project root
         if "Django" in self.name:
@@ -174,39 +188,33 @@ class ServiceTab(QWidget):
             self.process.start(PYTHON_EXE, args)
             # don't assume started immediately; wait is not blocking here
         except Exception as e:
-            self.append_log(f"[EXCEPTION] process.start() raised: {e}")
-            set_status_color(self.status_label, "Stopped")
+            self.append_log(f"[EXCEPTION] start() failed: {e}")
+            set_status_color(self.status_label, "Stopped", "Status")
             self.process = None
             return
 
-        set_status_color(self.status_label, "Starting...")
+        set_status_color(self.status_label, "Starting...", "Status")
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.restart_btn.setEnabled(True)
 
-        # Special: if Django, open chrome after short delay (use your desired URL)
-        if "Django" in self.name:
-            QTimer.singleShot(5000, lambda: self.open_chrome("http://127.0.0.1:8000"))
-
     def stop_service(self):
         if not self.process:
             self.append_log("[INFO] service not running")
-            set_status_color(self.status_label, "Stopped")
-            self.start_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
             return
 
         self.append_log(f"[INFO] Stopping service '{self.name}' ...")
-        # ask the process to terminate gracefully
+        self.user_requested_stop = True
+
         self.process.terminate()
         # give some time to quit gracefully; if not, kill
         if not self.process.waitForFinished(3000):
-            self.append_log("[WARN] terminate didn't finish in 3s, killing")
+            self.append_log("[WARN] terminate timeout — killing process")
             self.process.kill()
             self.process.waitForFinished(2000)
 
         self.process = None
-        set_status_color(self.status_label, "Stopped")
+        set_status_color(self.status_label, "Stopped", "Status")
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
@@ -219,22 +227,22 @@ class ServiceTab(QWidget):
         if not self.process:
             return
         try:
-            b = self.process.readAllStandardOutput()
-            text = bytes(b).decode("utf-8", errors="ignore")
+            text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="ignore")
         except Exception:
             text = "<could not decode stdout>"
         if text.strip():
+            self.last_output_time = time.time()     # NEW
             self.append_log(text.rstrip())
 
     def read_stderr(self):
         if not self.process:
             return
         try:
-            b = self.process.readAllStandardError()
-            text = bytes(b).decode("utf-8", errors="ignore")
+            text = bytes(self.process.readAllStandardError()).decode("utf-8", errors="ignore")
         except Exception:
             text = "<could not decode stderr>"
         if text.strip():
+            self.last_output_time = time.time()     # NEW
             self.append_log("[STDERR] " + text.rstrip())
 
     def process_error(self, error):
@@ -244,23 +252,39 @@ class ServiceTab(QWidget):
         except Exception:
             err_text = "Unknown QProcess error"
         self.append_log(f"[QPROCESS ERROR] {err_text}")
-        set_status_color(self.status_label, "Stopped")
+        set_status_color(self.status_label, "Stopped", "Status")
         self.process = None
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
     def process_started(self):
-        self.append_log("[INFO] process started (QProcess.started)")
-        set_status_color(self.status_label, "Running")
+        self.append_log("[INFO] process started")
+        self.last_output_time = time.time()  # NEW
+        set_status_color(self.status_label, "Running", "Status")
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
 
     def service_finished(self):
         self.append_log("[INFO] process finished")
-        set_status_color(self.status_label, "Exited")
+
+        # If stop button was pressed -> don't restart
+        if self.user_requested_stop:
+            set_status_color(self.status_label, "Stopped", "Status")
+            self.process = None
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.user_requested_stop = False
+            return
+
+        # Otherwise: crash detected -> auto restart
+        set_status_color(self.status_label, "Exited", "Status")
+        self.append_log("[WARN] Service crashed — Restarting in 5 seconds...")
         self.process = None
-        self.start_btn.setEnabled(True)
+        self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(False)
+
+        # Auto restart after 5 sec
+        QTimer.singleShot(5000, self.start_service)
 
     def update_disk_status(self):
         # cross-platform root path
@@ -277,10 +301,28 @@ class ServiceTab(QWidget):
         self.log_area.clear()
         self.append_log("[Logs cleared automatically]")
 
+    def check_output_timeout(self):
+        """NEW — Restart service if no output for 5 minutes."""
+        if not self.process:
+            return
+
+        if self.last_output_time is None:
+            return
+
+        silence = time.time() - self.last_output_time
+        if "Web" in self.name or "Data" in self.name:
+            if silence > 60*60*8:  # 8 hours
+                self.append_log("[WATCHDOG] No output for 5 minutes — Restarting...")
+                self.restart_service()
+        else:
+            if silence > 360:  # 6 minutes
+                self.append_log("[WATCHDOG] No output for 5 minutes — Restarting...")
+                self.restart_service()
+
     def open_chrome(self, url="http://127.0.0.1:8000"):
         # attempt to open browser; log error if fails
         try:
-            subprocess.Popen([CHROME_PATH, "--start-fullscreen", url])
+            subprocess.Popen([CHROME_PATH, "--kiosk", url])
             self.append_log(f"[INFO] Opened browser to {url}")
         except Exception as e:
             self.append_log(f"[ERROR] Could not open Chrome: {e}")
@@ -305,7 +347,7 @@ class DashboardTab(QWidget):
         self.status_labels = {}
         for name in service_tabs:
             lbl = QLabel(f"{name}: Inactive")
-            set_status_color(lbl, "Inactive")
+            set_status_color(lbl, "Inactive", name)
             layout.addWidget(lbl)
             self.status_labels[name] = lbl
 
@@ -327,8 +369,8 @@ class DashboardTab(QWidget):
             self.disk_label.setText(f"Disk: error ({e})")
 
         for name, tab in self.service_tabs.items():
-            status = tab.status_label.text().replace("Status: ", "")
-            set_status_color(self.status_labels[name], status)
+            status = tab.status_label.text().replace(f"{name}: ", "")
+            set_status_color(self.status_labels[name], status, name)
 
 
 class MainWindow(QMainWindow):
@@ -338,9 +380,11 @@ class MainWindow(QMainWindow):
         self.setStyleSheet("background-color: #2b2b2b; color: white;")
 
         self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("QTabWidget::pane { border: 1px solid #444; }"
-                                "QTabBar::tab { background: #333; padding: 6px; }"
-                                "QTabBar::tab:selected { background: #555; }")
+        self.tabs.setStyleSheet(
+            "QTabWidget::pane { border: 1px solid #444; }"
+            "QTabBar::tab { background: #333; padding: 6px; }"
+            "QTabBar::tab:selected { background: #555; }"
+        )
 
         self.service_tabs = {}
 

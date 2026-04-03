@@ -7,7 +7,8 @@ from datetime import datetime
 from DEPENDANT.MQTT import MQTT
 from DEPENDANT.LOGGING import initializeLogger
 
-LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
+BASE_DIR = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/"
+LOGS_PATH = BASE_DIR + "LOGS/"
 
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
@@ -51,7 +52,7 @@ def main():
                         logger.debug(f"Tag raw={raw}  decoded={rfid!r}")
 
                         if not session_active:
-                            session_uid   = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:4]
+                            session_uid   = datetime.now().strftime("%Y%m%d%H%M%S")
                             last_seen = time.time()
                             session_active = True
                             rfids = set()

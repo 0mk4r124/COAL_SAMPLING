@@ -1,7 +1,6 @@
 import os
 import time
 import random
-import threading
 import pymysql
 import traceback
 from datetime import datetime
@@ -12,12 +11,7 @@ from DEPENDANT.LOGGING import initializeLogger
 
 from LOGIC import (
     initialize_ai_model,
-    check_vehicle_front_present,
-    confirm_barrier_opening,
-    confirm_barrier_closing,
-    confirm_auger_position,
-    check_sampling_cycle_completion,
-    generate_qr_code
+    confirm_auger_position
 )
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -27,19 +21,20 @@ DB_PASS = "insightzz@123"
 DB_NAME = "COAL_SAMPLING_DHAR"
 
 # ── Tuning ────────────────────────────────────────────────────────────────────
-DB_POLL_SEC     = 10
-DB_WAIT_TIMEOUT = 300
+DB_POLL_SEC     = 10 # Poll DB every x seconds while waiting for entry after RFID read
+DB_WAIT_TIMEOUT = 600 # Wait up to x seconds for DB entry to appear after RFID read before aborting
 TOTAL_CYCLES    = 3
-HOME_POSITION_TIMEOUT = 300
+HOME_POSITION_TIMEOUT = 300 # Wait up to x seconds for auger to return to home position before aborting
 SAMPLE_CYCLE_TIMEOUT = 600
 POSITION_CONFIRMATION_TIMEOUT = 120
-CLOSE_CYCLE_WAIT_TIME = 120
-SET_BUCKET_WAIT_TIMEOUT = 120
+CLOSE_CYCLE_WAIT_TIME = 60 # Wait time after close cycle command before checking for completion - allows PLC to process command and start movement
+SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 
-TEMP_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/TEMP_IMG/"
-RESULT_IMG_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/RESULT/"
-INF_IMG = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/INF/"
-LOGS_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/LOGS/"
+BASE_DIR = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/"
+TEMP_IMG_PATH = BASE_DIR + "TEMP_IMG/"
+RESULT_IMG_PATH = BASE_DIR + "RESULT/"
+INF_IMG = BASE_DIR + "INF/"
+LOGS_PATH = BASE_DIR + "LOGS/"
 
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
@@ -122,11 +117,68 @@ def _db_connect():
         autocommit=False
     )
 
+def db_resolve_bucket(rfid: str, vendor_code: str) -> int:
+    db = None
+    try:
+        db = _db_connect()
+        cur = db.cursor(pymysql.cursors.DictCursor)
+
+        # Get today's logs (optimized range instead of DATE())
+        cur.execute(
+            """
+            SELECT vl.BUCKET_NO, vl.RFIDS, vm.VENDOR_CODE
+            FROM VEHICLE_LOGS vl
+            LEFT JOIN VEHICLE_MASTER vm
+                ON vl.RFIDS LIKE CONCAT('%', vm.RFID, '%')
+            WHERE vl.CREATE_TIME >= CURDATE()
+              AND vl.CREATE_TIME < CURDATE() + INTERVAL 1 DAY
+            """
+        )
+        rows = cur.fetchall()
+
+        if not rows:
+            return 1
+
+        used_buckets = set()
+        vendor_bucket = None
+
+        for row in rows:
+            bucket = row.get("BUCKET_NO")
+            vc = row.get("VENDOR_CODE")
+
+            if bucket:
+                bucket = int(bucket)
+                used_buckets.add(bucket)
+
+                # Same vendor → reuse
+                if vc == vendor_code and vendor_bucket is None:
+                    vendor_bucket = bucket
+
+        if vendor_bucket:
+            return vendor_bucket
+
+        # Find first free bucket (1–10)
+        for i in range(1, 11):
+            if i not in used_buckets:
+                return i
+
+        # All used → cyclic
+        return (max(used_buckets) % 10) + 1
+
+    except Exception as e:
+        print(f"[DB] db_resolve_bucket error: {e}")
+        logger.error(f"{traceback.format_exc()}")
+        return 1
+    finally:
+        if db:
+            db.close()
+
 def db_find_vehicle(rfid: str) -> dict | None:
     db = None
     try:
         db  = _db_connect()
         cur = db.cursor(pymysql.cursors.DictCursor)
+
         cur.execute(
             """
             SELECT
@@ -134,20 +186,31 @@ def db_find_vehicle(rfid: str) -> dict | None:
                 vm.VEHICLE_NUMBER,
                 vm.VENDOR_CODE,
                 vr.VENDER_NAME,
-                vr.BUCKET_NO
+                vl.BUCKET_NO
             FROM VEHICLE_MASTER vm
-            LEFT JOIN VENDOR_MASTER vr ON vr.VENDOR_CODE = vm.VENDOR_CODE
+            LEFT JOIN VENDOR_MASTER vr 
+                ON vr.VENDOR_CODE = vm.VENDOR_CODE
+            LEFT JOIN VEHICLE_LOGS vl 
+                ON vl.RFIDS LIKE CONCAT('%', vm.RFID, '%')
+                AND vl.CREATE_TIME = (
+                    SELECT MAX(vl2.CREATE_TIME)
+                    FROM VEHICLE_LOGS vl2
+                    WHERE vl2.RFIDS LIKE CONCAT('%', vm.RFID, '%')
+                )
             WHERE vm.RFID = %s
             LIMIT 1
             """,
             (rfid,)
         )
+
         return cur.fetchone()
+
     except Exception as e:
-        logger.error(f"[DB] db_find_vehicle error: {e}")
-        return None
+        print(f"[DB] db_find_vehicle error: {e}")
+        logger.error(f"{traceback.format_exc()}")
     finally:
-        if db: db.close()
+        if db:
+            db.close()
 
 def db_vehicle_already_in_front(rfids_str: str) -> bool:
     db = None
@@ -170,12 +233,12 @@ def db_vehicle_already_in_front(rfids_str: str) -> bool:
         row = cur.fetchone()
         return (row[0] > 1) if row else False
     except Exception as e:
-        logger.error(f"[DB] db_vehicle_already_in_front error: {e}")
-        return False
+        print(f"[DB] db_vehicle_already_in_front error: {e}")
+        logger.error(f"{traceback.format_exc()}")
     finally:
         if db: db.close()
 
-def db_create_log(uid: str, rfids: list, paths: dict) -> bool:
+def db_create_log(uid: str, rfids: list, bucket_no: str, paths: dict) -> bool:
     db = None
     try:
         db  = _db_connect()
@@ -184,15 +247,15 @@ def db_create_log(uid: str, rfids: list, paths: dict) -> bool:
         cur.execute(
             """
             INSERT INTO VEHICLE_LOGS
-                (UID, RFIDS, STATUS, CREATE_TIME, 
+                (UID, RFIDS, STATUS, BUCKET_NO, CREATE_TIME, 
                 VEHICLE_IMG_PATH, 
                 SAMPLE_1_IMG_PATH, 
                 SAMPLE_2_IMG_PATH, 
                 SAMPLE_3_IMG_PATH, 
-                QR_CODE_PATH)
+                REPORT_PATH)
             VALUES
                 (
-                %s, %s, %s, %s, 
+                %s, %s, %s, %s, %s, 
                 %s, 
                 %s, 
                 %s,
@@ -200,22 +263,53 @@ def db_create_log(uid: str, rfids: list, paths: dict) -> bool:
                 %s
                 )
             """,
-            (uid, "|".join(rfids), "IN_PROGRESS", now, 
+            (uid, "|".join(rfids), "IN_PROGRESS", bucket_no,  now, 
                 paths.get("VEHICLE_IMG_PATH"), 
                 paths.get("SAMPLE_1_IMG_PATH"), 
                 paths.get("SAMPLE_2_IMG_PATH"), 
                 paths.get("SAMPLE_3_IMG_PATH"), 
-                paths.get("QR_CODE_PATH")
+                paths.get("REPORT_PATH")
             )
         )
         db.commit()
         print(f"[DB] Log created  uid={uid}  rfids={rfids}")
         return True
     except Exception as e:
-        logger.error(f"[DB] db_create_log error: {e}")
-        return False
+        print(f"[DB] db_create_log error: {e}")
+        logger.error(f"{traceback.format_exc()}")
     finally:
         if db: db.close()
+
+def db_bucket_update_log(uid: str, bucket_no: int) -> bool:
+    db = None
+    try:
+        db = _db_connect()
+        cur = db.cursor()
+
+        cur.execute(
+            """
+            UPDATE VEHICLE_LOGS
+            SET BUCKET_NO = %s,
+                UPDATE_TIME = %s
+            WHERE UID = %s
+            ORDER BY CREATE_TIME DESC
+            LIMIT 1
+            """,
+            (bucket_no, datetime.now(), uid)
+        )
+
+        db.commit()
+        print(f"[DB] Bucket updated uid={uid} bucket={bucket_no}")
+        return True
+
+    except Exception as e:
+        print(f"[DB] db_bucket_update_log error: {e}")
+        logger.error(f"{traceback.format_exc()}")
+        return False
+
+    finally:
+        if db:
+            db.close()
 
 def db_error_log(uid: str, msg: str) -> bool:
     db = None
@@ -226,13 +320,14 @@ def db_error_log(uid: str, msg: str) -> bool:
             """
             UPDATE VEHICLE_LOGS
                SET STATUS = 'ERROR', ERROR_MESSAGE = %s, UPDATE_TIME = %s
-             WHERE UID = %s
+            WHERE UID = %s
             """,
             (msg, datetime.now(), uid)
         )
         db.commit()
     except Exception as e:
-        logger.error(f"[DB] db_complete_log error: {e}")
+        print(f"[DB] db_complete_log error: {e}")
+        logger.error(f"{traceback.format_exc()}")
     finally:
         if db: db.close()
 
@@ -245,14 +340,14 @@ def db_complete_log(uid: str) -> bool:
             """
             UPDATE VEHICLE_LOGS
                SET STATUS = 'COMPLETED', UPDATE_TIME = %s
-             WHERE UID = %s
+            WHERE UID = %s
             """,
             (datetime.now(), uid)
         )
         db.commit()
-        print("DB complete Added !!!!!!")
     except Exception as e:
-        logger.error(f"[DB] db_complete_log error: {e}")
+        print(f"[DB] db_complete_log error: {e}")
+        logger.error(f"{traceback.format_exc()}")
     finally:
         if db: db.close()
 
@@ -276,10 +371,12 @@ def db_add_plc_comm(uid: str, state: str) -> bool:
         db.commit()
         return True
     except Exception as e:
-        logger.error(f"[DB] db_update_plc_comm error: {e}")
-        return False
+        print(f"[DB] db_update_plc_comm error: {e}")
+        logger.error(f"{traceback.format_exc()}")
     finally:
         if db: db.close()
+    
+    return False
 
 def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual: str = None) -> bool:
     db = None
@@ -301,10 +398,12 @@ def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual:
         db.commit()
         return True
     except Exception as e:
-        logger.error(f"[DB] db_update_plc_comm error: {e}")
-        return False
+        print(f"[DB] db_update_plc_comm error: {e}")
+        logger.error(f"{traceback.format_exc()}")
     finally:
         if db: db.close()
+    
+    return False
 
 # ------------------------------------------------------------------------------
 class Manager:
@@ -377,9 +476,10 @@ class Manager:
     def _cam(self, **kw):     self.mqtt.publish("manager/camera",      kw)
     def _barrier(self, **kw): self.mqtt.publish("manager/plc_barrier", kw)
     def _sampler(self, **kw): self.mqtt.publish("manager/plc_sampler", kw)
+    def _printer(self, **kw): self.mqtt.publish("manager/printer",     kw)
 
     def _goto(self, new_state: State):
-        print(f"[MANAGER] State: {self.state.name}  {new_state.name}")
+        print(f"[MANAGER] State: {self.state.name} --> {new_state.name}")
         self.state             = new_state
         self._state_entered_at = time.time()
         
@@ -390,12 +490,12 @@ class Manager:
     def _elapsed(self) -> float:
         return time.time() - self._state_entered_at
 
-    def _resolve_rfid(self, rfids: list) -> tuple[str | None, dict | None]:
+    def _resolve_rfid(self, rfids: list) -> dict | None:
         for rfid in rfids:
             row = db_find_vehicle(rfid)
             if row:
-                return rfid, row
-        return None, None
+                return row
+        return None
     
     def _wait_for_file(self, check_path_1: str, check_path_3: str, timeout: float = 10.0) -> bool:
         start = time.time()
@@ -439,6 +539,7 @@ class Manager:
 
         except Exception as e:
             print(f"[MANAGER] Error capturing images: {e}")
+            logger.error(f"{traceback.format_exc()}")
             return None
 
     def _confirm_auger_position_with_movement_loop(self, target_area: int) -> bool:
@@ -538,30 +639,14 @@ class Manager:
             
             # ─── Summary ────────────────────────────────────────────────────────────
             self._confirmation_results = confirmations
-            passed = sum(confirmations)
-            total = len(confirmations)
-            
-            print(f"\n[MANAGER] | AUGER POSITION CONFIRMATION SUMMARY ")
-            print(f"[MANAGER] Loop 1 (Original): {'PASS' if confirmations[0] else 'FAIL':<28} ")
-            print(f"[MANAGER] Loop 2 (Right):    {'PASS' if confirmations[1] else 'FAIL':<28} ")
-            print(f"[MANAGER] Loop 3 (Left):     {'PASS' if confirmations[2] else 'FAIL':<28} ")
-            print(f"[MANAGER] Loop 4 (Forward):  {'PASS' if confirmations[3] else 'FAIL':<28} ")
-            print(f"[MANAGER] Loop 5 (Reverse):  {'PASS' if confirmations[4] else 'FAIL':<28} ")
-            print(f"[MANAGER] Total: {passed}/{total} confirmations passed                ")
-            
-            # Return True only if ALL 5 loops pass
-            final_result = all(confirmations)
-            if final_result:
-                print(f"[MANAGER] AUGER POSITIONING CONFIRMED - All 5 loops passed!")
-            else:
-                print(f"[MANAGER] AUGER POSITIONING FAILED - Some loops did not pass")
-            
+
+            # Return True if any loop out of 5 loops pass
+            final_result = any(confirmations)
             return final_result
         
         except Exception as e:
             print(f"[MANAGER] Error in auger position confirmation loop: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"{traceback.format_exc()}")
             return False
 
     # ── State handlers ────────────────────────────────────────────────────────
@@ -579,9 +664,10 @@ class Manager:
             "SAMPLE_1_IMG_PATH": os.path.join(RESULT_IMG_PATH, self.date_file, self.uid, "SAMPLE_1_IMG.jpg"),
             "SAMPLE_2_IMG_PATH": os.path.join(RESULT_IMG_PATH, self.date_file, self.uid, "SAMPLE_2_IMG.jpg"),
             "SAMPLE_3_IMG_PATH": os.path.join(RESULT_IMG_PATH, self.date_file, self.uid, "SAMPLE_3_IMG.jpg"),
-            "QR_CODE_PATH": os.path.join(RESULT_IMG_PATH, self.date_file, self.uid, "QR_CODE.jpg"),
+            "REPORT_PATH": os.path.join(RESULT_IMG_PATH, self.date_file, self.uid, f"REPORT_{self.uid}.pdf"),
         }
         print(f"[MANAGER] RFID event uid={self.uid}  tags={self.rfids}")
+        logger.debug(f"RFID event uid={self.uid}  tags={self.rfids}")
         self._cam(action="cam2_single", path=self.paths["VEHICLE_IMG_PATH"])
         self._goto(State.DB_CHECK)
 
@@ -590,22 +676,24 @@ class Manager:
 
         if msg and msg.get("action") == "cam2_done":
             print("[MANAGER] CAM2 captured — checking for vehicle front …")
-            # TODO: Get image and run AI check
-            # For now, proceed to DB check
+            # Add the AI Model verification here if needed, before DB check
         
-        valid_rfid, vehicle = self._resolve_rfid(self.rfids)
+        vehicle = self._resolve_rfid(self.rfids)
         
         if vehicle:
             print(f"[MANAGER] Vehicle found in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
             self.vehicle = vehicle
+            vendor_code = vehicle.get("VENDOR_CODE")
+            bucket_no = db_resolve_bucket(self.rfids[0], vendor_code)
             
             if db_vehicle_already_in_front("|".join(self.rfids)):
                 print("[MANAGER] Vehicle already in front — aborting.")
+                logger.debug(f"Vehicle already in front {self.uid} — aborting.")
                 self._reset()
                 return
             
             # Create log entry
-            db_create_log(self.uid, self.rfids, self.paths)
+            db_create_log(self.uid, self.rfids, bucket_no, self.paths)
             db_add_plc_comm(self.uid, self.state.name)
             self._goto(State.OPEN_BARRIER)
         else:
@@ -617,6 +705,7 @@ class Manager:
     def _handle_waiting_for_db(self):
         if self._elapsed() > DB_WAIT_TIMEOUT:
             print("[MANAGER] DB wait timed out — resetting.")
+            logger.debug(f"DB wait timed out {self.uid} — resetting.")
             self._reset("DB wait timed out — resetting")
             return
 
@@ -625,10 +714,16 @@ class Manager:
 
         self._db_last_polled = time.time()
         print("[MANAGER] Polling DB for vehicle …")
-        valid_rfid, vehicle = self._resolve_rfid(self.rfids)
+        vehicle = self._resolve_rfid(self.rfids)
 
         if vehicle:
+            self.vehicle = vehicle
+            vendor_code = vehicle.get("VENDOR_CODE")
+            bucket_no = db_resolve_bucket(self.rfids[0], vendor_code)
+            db_bucket_update_log(self.uid, bucket_no)
+
             print(f"[MANAGER] Vehicle now in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
+            logger.debug(f"Vehicle now in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
             self.vehicle = vehicle
             self._goto(State.OPEN_BARRIER)
 
@@ -639,8 +734,7 @@ class Manager:
         
         vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
         vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
-        qr_path = generate_qr_code(vendor_name, vehicle_number, self.uid, self.paths["QR_CODE_PATH"])
-        print(f"[MANAGER] QR code generated at {qr_path}")
+        self._printer(action="send_data", vendor_name=vendor_name.upper().strip(), vehicle_number=vehicle_number.upper().strip(), dtstamp=self.uid.replace("_", ""))
         
         self._goto(State.BARRIER_OPENING)
 
@@ -660,7 +754,7 @@ class Manager:
     def _handle_set_bucket(self):
         bucket_no = int(self.vehicle.get("BUCKET_NO", 1))
         print(f"[MANAGER] Setting bucket to {bucket_no} …")
-        logger.debug(f"[MANAGER] Setting bucket to {bucket_no} …")
+        logger.debug(f"Setting bucket to {bucket_no} …")
         self._barrier(action="set_bucket", bucket_no=bucket_no)
         
         # Wait for bucket confirmation
@@ -696,9 +790,10 @@ class Manager:
             auto_manual_status = msg.get("status", True)
             if auto_manual_status == "auto_manual_off":
                 print("[MANAGER] Manual mode — waiting for user confirmation …")
+                logger.debug(f"Manual mode {self.uid} — waiting for user confirmation …")
                 # Update database to trigger popup
-                db_update_plc_comm(self.uid, self.state.name, auto_manual="MANUAL")
-                time.sleep(1)
+                db_update_plc_comm(self.uid, self.state.name, auto_manual="ACTIVE")
+                time.sleep(5)
                 # Web app will handle this - popup will appear
                 return
             
@@ -707,8 +802,6 @@ class Manager:
             time.sleep(2)
             self._barrier(action="red_signal")
             self._goto(State.RED_SIGNAL)
-        else:
-            print("[MANAGER] Waiting for vehicle to be placed …")
 
     def _handle_red_signal(self):
         msg = self._pop("plc_barrier/status")
@@ -771,6 +864,7 @@ class Manager:
     def _handle_cycle_position(self):
         if self._successful_cycles >= TOTAL_CYCLES:
             print(f"[MANAGER] All {TOTAL_CYCLES} cycles completed.")
+            logger.debug(f"All {TOTAL_CYCLES} cycles completed.")
             self._goto(State.COMPLETE_FINAL)
         
         # Get sample positions
@@ -846,7 +940,6 @@ class Manager:
         
         if msg and msg.get("status", "") == "sample_cycle_complete":
             print(f"[MANAGER] Cycle {self.cycle} completed")
-            # TODO: AI verification of successful sample
             self._successful_cycles += 1
             self._current_sample_index += 1
             
@@ -876,8 +969,6 @@ class Manager:
             time.sleep(3)
             
     def _handle_all_samples_collection(self):
-        """Start sampling cycle"""
-        # Check for emergency stop before starting cycle
         msg = self._pop("plc_sampler/status")
 
         if msg and msg.get("status") == "emergency_stop":
@@ -889,7 +980,7 @@ class Manager:
         
         elif msg and msg.get("status") == "all_samples_collected":
             now = time.time()
-            while time.time() - now < CLOSE_CYCLE_WAIT_TIME:
+            while (time.time() - now) < CLOSE_CYCLE_WAIT_TIME:
                 time.sleep(10)
                 print("[MANAGER] Waiting for Cycle Stop.")
             self._sampler(action="sample_cycle_stop")
@@ -897,7 +988,7 @@ class Manager:
 
         else:
             self._sampler(action="check_all_samples_status")
-            time.sleep(1)
+            time.sleep(2)
 
     def _handle_cycle_emergency_wait(self):
         print("[MANAGER] Waiting for emergency stop clearance on Sampler PLC …")
@@ -922,7 +1013,6 @@ class Manager:
             self._goto(State.VEHICLE_PLACEMENT)
 
     def _handle_complete_final(self):
-        """Complete sampling — generate QR code and save logs"""
         msg = self._pop("plc_sampler/status")
 
         if msg and msg.get("status") == "sample_cycle_stop_comp": 
@@ -937,7 +1027,6 @@ class Manager:
             return
 
     def _handle_green_signal(self):
-        """Send green signal to PLC"""
         msg = self._pop("plc_barrier/status")
         
         if msg and msg.get("status") == "green_sent":
@@ -950,10 +1039,10 @@ class Manager:
             self._goto(State.COMPLETE)
 
     def _handle_complete(self):
-        """Session complete — ready for next vehicle"""
         print(f"[MANAGER] Session {self.uid} complete.")
         db_complete_log(self.uid)
         time.sleep(5)
+        self._printer(action="stop")
         self._cam(action="sample_capture_stop")
         self._sampler(action="reset")
         self._barrier(action="reset")
@@ -961,8 +1050,8 @@ class Manager:
         self._cam(action="reset")
 
     def _handle_error(self):
-        """Error state — reset system"""
         print("[MANAGER] Error state — resetting system.")
+        self._printer(action="stop")
         self._cam(action="sample_capture_stop")
         self._cam(action="reset")
         self._barrier(action="close_barrier")
@@ -970,7 +1059,6 @@ class Manager:
         self._reset("Handled error state !!")
 
     def _reset(self, msg: str = ""):
-        """Reset state for next vehicle"""
         if msg != "":
             db_error_log(self.uid, f"Session reset due to error : {msg}")
         self.uid       = None
