@@ -434,4 +434,4 @@ def send_vehicle_data(eth_0: str, eth_1: str, eth_2: str):
         print("Done")
 
 if __name__ == "__main__":
-    send_vehicle_data("AB12AB1234", "INS", "1130PM")
+    send_vehicle_data("RJ01SD0011|VENDORNAME|202604031150", "VENDORNAME", "202604031150")
