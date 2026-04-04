@@ -8,43 +8,43 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QTabWidget, QVBoxLayout, QPushButton,
     QPlainTextEdit, QLabel, QHBoxLayout, QMainWindow, QFrame
 )
-from PyQt5.QtCore import QProcess, QTimer
+from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment
 from PyQt5.QtGui import QFont
 
 from tendo import singleton
 me = singleton.SingleInstance()
 
-# BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
-# SERVICES = {
-#     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
-#     "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS\\CAM_CAPTURE.py",
-#     "Printer": fr"{BASE_FILE_PATH}SCRIPTS\\PRINTER.py",
-#     "Logic": fr"{BASE_FILE_PATH}SCRIPTS\\MAIN_MANAGER.py",
-#     "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_BARRIER.py",
-#     "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_SAMPLER.py",
-#     "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
-#     # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
-#     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
-#     "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
-# }
-# PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
-# CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
-
-BASE_FILE_PATH = "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/"
+BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
 SERVICES = {
     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
-    # "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS/CAM_CAPTURE.py",
-    # "Printer": fr"{BASE_FILE_PATH}SCRIPTS/PRINTER.py",
-    "Logic": fr"{BASE_FILE_PATH}SCRIPTS/MAIN_MANAGER.py",
-    # "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS/PLC_BARRIER.py",
-    # "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS/PLC_SAMPLER.py",
-    # "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS/RFID_READER.py",
-    "TEST": fr"{BASE_FILE_PATH}SCRIPTS/TEST.py",
+    "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS\\CAM_CAPTURE.py",
+    "Printer": fr"{BASE_FILE_PATH}SCRIPTS\\PRINTER.py",
+    "Logic": fr"{BASE_FILE_PATH}SCRIPTS\\MAIN_MANAGER.py",
+    "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_BARRIER.py",
+    "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_SAMPLER.py",
+    "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
+    # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
-    "Django": fr"{BASE_FILE_PATH}WEB_APP/manage.py runserver 0.0.0.0:8080"
+    "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
 }
-PYTHON_EXE = "/usr/bin/python3"
-CHROME_PATH = "/usr/bin/google-chrome"  # Adjust if different
+PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
+CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
+
+# BASE_FILE_PATH = "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/"
+# SERVICES = {
+#     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
+#     # "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS/CAM_CAPTURE.py",
+#     # "Printer": fr"{BASE_FILE_PATH}SCRIPTS/PRINTER.py",
+#     "Logic": fr"{BASE_FILE_PATH}SCRIPTS/MAIN_MANAGER.py",
+#     # "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS/PLC_BARRIER.py",
+#     # "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS/PLC_SAMPLER.py",
+#     # "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS/RFID_READER.py",
+#     "TEST": fr"{BASE_FILE_PATH}SCRIPTS/TEST.py",
+#     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
+#     "Django": fr"{BASE_FILE_PATH}WEB_APP/manage.py runserver 0.0.0.0:8080"
+# }
+# PYTHON_EXE = "/usr/bin/python3"
+# CHROME_PATH = "/usr/bin/google-chrome"  # Adjust if different
 
 def set_status_color(label: QLabel, status: str, name: str = ""):
     """Helper to color status labels."""
@@ -157,9 +157,19 @@ class ServiceTab(QWidget):
         self.process = QProcess(self)
         
         # Set environment variables for the process
-        env = self.process.processEnvironment()
+        env = QProcessEnvironment.systemEnvironment()  # <-- CRITICAL
         env.insert("BASE_FILE_PATH", BASE_FILE_PATH)
+
+        # Ensure HOME resolution works (extra safety)
+        env.insert("USERPROFILE", r"C:\Users\COAL_SAMPLING_1")
+        env.insert("HOMEDRIVE", "C:")
+        env.insert("HOMEPATH", r"\Users\COAL_SAMPLING_1")
+
+        # Optional but recommended for matplotlib stability
+        env.insert("MPLCONFIGDIR", r"C:\temp\matplotlib")
+
         self.process.setProcessEnvironment(env)
+
         # merge channels so stdout/stderr come together
         try:
             self.process.setProcessChannelMode(QProcess.MergedChannels)

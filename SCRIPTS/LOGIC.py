@@ -9,7 +9,7 @@ from DEPENDANT.INFERENCE import MASKRCNN
 from DEPENDANT.LOGGING import initializeLogger
 
 # AI Model Initialization 
-BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', '/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/')
+BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 MODEL_CONFIG_PATH = BASE_FILE_PATH + 'MODEL/configs/COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml'
 MODEL_PATH = BASE_FILE_PATH + 'MODEL/COAL_SAMPLING_27MAR/'
 MODEL_FILE = 'model_final.pth'

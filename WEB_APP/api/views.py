@@ -190,6 +190,9 @@ class Locate(Func):
 
 @csrf_exempt
 def fetch_history_data(request):
+    page = int(request.GET.get("page", 1))
+    per_page = int(request.GET.get("per_page", 12))
+
     start_date = request.GET.get('start_date')
     end_date = request.GET.get('end_date')
     vehicle_number = request.GET.get('vehicle_number')
@@ -256,6 +259,11 @@ def fetch_history_data(request):
     if vendor_name:
         queryset = queryset.filter(vendor_name__icontains=vendor_name)
 
+    total = queryset.count()
+    start = (page - 1) * per_page
+    end = start + per_page
+    queryset = queryset[start:end]
+
     results = []
     for idx, row in enumerate(queryset, start=1):
         results.append({
@@ -276,6 +284,9 @@ def fetch_history_data(request):
         "data": results,
         "vehicle_number": vehicle_number,
         "vendor_name": vendor_name,
+        "total": total,
+        "page": page,
+        "per_page": per_page
     })
 
 @csrf_exempt
@@ -356,7 +367,7 @@ def download_history_data(request):
 def vehicle_master(request):
     try:
         page = int(request.GET.get("page", 1))
-        per_page = int(request.GET.get("per_page", 10))
+        per_page = int(request.GET.get("per_page", 12))
 
         queryset = VEHICLE_MASTER.objects.all().order_by("rfid")
 

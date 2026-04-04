@@ -30,7 +30,7 @@ POSITION_CONFIRMATION_TIMEOUT = 120
 CLOSE_CYCLE_WAIT_TIME = 60 # Wait time after close cycle command before checking for completion - allows PLC to process command and start movement
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 
-BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', '/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING')
+BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 TEMP_IMG_PATH = BASE_FILE_PATH + "TEMP_IMG/"
 RESULT_IMG_PATH = BASE_FILE_PATH + "RESULT/"
 INF_IMG = BASE_FILE_PATH + "INF/"
@@ -734,10 +734,6 @@ class Manager:
         self._barrier(action="open_barrier")
         self._cam(action="sample_capture_start", uid=self.uid)
         
-        vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
-        vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
-        self._printer(action="send_data", vendor_name=vendor_name.replace(" ", "").upper(), vehicle_number=vehicle_number.replace(" ", "").upper(), dtstamp=self.uid.replace("_", ""))
-        
         self._goto(State.BARRIER_OPENING)
 
     def _handle_barrier_opening(self):
@@ -820,6 +816,12 @@ class Manager:
     def _handle_close_barrier(self):
         print("[MANAGER] Sending close barrier command …")
         self._barrier(action="close_barrier")
+        
+        vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
+        vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
+        self._printer(action="send_data", vendor_name=vendor_name.replace(" ", "").upper(), vehicle_number=vehicle_number.replace(" ", "").upper(), dtstamp=self.uid.replace("_", ""))
+        print(f"[MANAGER] Data Sent — {vendor_name.replace(' ', '').upper()} - {vehicle_number.replace(' ', '').upper()} - {self.uid.replace('_', '')}")
+
         self._goto(State.BARRIER_CLOSING)
 
     def _handle_barrier_closing(self):
