@@ -30,7 +30,7 @@ me = singleton.SingleInstance()
 # PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
 # CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
 
-BASE_FILE_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/"
+BASE_FILE_PATH = "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/"
 SERVICES = {
     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
     # "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS/CAM_CAPTURE.py",
@@ -41,9 +41,9 @@ SERVICES = {
     # "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS/RFID_READER.py",
     "TEST": fr"{BASE_FILE_PATH}SCRIPTS/TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
-    "Django": fr"{BASE_FILE_PATH}WEB_APP/manage.py runserver"
+    "Django": fr"{BASE_FILE_PATH}WEB_APP/manage.py runserver 0.0.0.0:8080"
 }
-PYTHON_EXE = "/home/omkar/venv/bin/python"
+PYTHON_EXE = "/usr/bin/python3"
 CHROME_PATH = "/usr/bin/google-chrome"  # Adjust if different
 
 def set_status_color(label: QLabel, status: str, name: str = ""):

@@ -367,10 +367,11 @@ def vehicle_master(request):
         vehicles = queryset[start:end]
 
         data = []
-        for v in vehicles:
+        for idx, v in enumerate(vehicles, start=1):
             vendor = VENDOR_MASTER.objects.filter(vendor_code=v.vendor_code).first()
 
             data.append({
+                "sno": idx,
                 "rfid": v.rfid,
                 "vehicle_number": v.vehicle_number,
                 "vendor_code": v.vendor_code,
@@ -548,13 +549,14 @@ def get_current_status(request):
         # 4. If NO vehicle found → trigger ADD VEHICLE FLOW
         if not vehicle_obj:
             vendors = list(
-                VENDOR_MASTER.objects.values("vendor_code", "vendor_name", "bucket_no")
+                VENDOR_MASTER.objects.values("vendor_code", "vendor_name")
             )
 
             return JsonResponse({
                 "status": "in_progress",
                 "uid": current_vehicle.uid,
                 "rfids": current_vehicle.rfids,
+                "bucket_number": current_vehicle.bucket_no,
                 "add_vehicle": "YES", 
                 "vendors": vendors, 
                 "current_state": "WAITING_FOR_VEHICLE_MASTER",
@@ -601,6 +603,7 @@ def get_current_status(request):
         return JsonResponse({
             "status": "in_progress",
             "uid": current_vehicle.uid,
+            "bucket_number": current_vehicle.bucket_no,
             "add_vehicle": "NO",
             "current_state": current_state,
             "vehicle_number": vehicle_obj.vehicle_number,

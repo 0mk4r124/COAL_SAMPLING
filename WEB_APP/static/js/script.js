@@ -115,7 +115,7 @@ document.getElementById('vendorNameInput').addEventListener('input', function ()
     const inputValue = this.value.trim().toLowerCase();
 
     const vendorCodeInput = document.getElementById('vendorCodeInput');
-    const bucketInput = document.getElementById('bucketNoInput');
+    // const bucketInput = document.getElementById('bucketNoInput');
 
     // Try to find match
     const match = window.vendorCache.find(v => 
@@ -125,18 +125,22 @@ document.getElementById('vendorNameInput').addEventListener('input', function ()
     if (match) {
         // ✅ Existing vendor → autofill
         vendorCodeInput.value = match.vendor_code || '';
-        bucketInput.value = match.bucket_no || '';
+        // bucketInput.value = match.bucket_no || '';
 
         vendorCodeInput.readOnly = true;
-        bucketInput.readOnly = true;
+        // bucketInput.readOnly = true;
     } else {
         // ✅ New vendor → allow input
         vendorCodeInput.value = '';
-        bucketInput.value = '';
+        // bucketInput.value = '';
 
         vendorCodeInput.readOnly = false;
-        bucketInput.readOnly = false;
+        // bucketInput.readOnly = false;
     }
+});
+
+document.getElementById("vehicleNumberInput").addEventListener("input", function() {
+    this.value = this.value.toUpperCase();
 });
 
 function updateCurrentStatus() {
@@ -298,6 +302,7 @@ function fetchVehicleMaster(page=1) {
                 const tr = document.createElement('tr');
 
                 tr.innerHTML = `
+                    <td>${row.sno}</td>
                     <td>${row.rfid}</td>
                     <td>${row.vehicle_number}</td>
                     <td>${row.vendor_name}</td>
@@ -393,19 +398,19 @@ function populateTable(data, table_name) {
         data.forEach(row => {
             const tr = document.createElement('tr');
             const VehicleImgButton = row.vehicle_image
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.vehicle_image}">Image View</button>`
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.vehicle_image}">Vehicle View</button>`
                 : "";
             const Img1Button = row.sample_1_image
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_1_image}">Image View</button>`
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_1_image}">Sample View</button>`
                 : "";
             const Img2Button = row.sample_2_image
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_2_image}">Image View</button>`
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_2_image}">Sample View</button>`
                 : "";
             const Img3Button = row.sample_3_image
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_3_image}">Image View</button>`
+                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_3_image}">Sample View</button>`
                 : "";
-            const ReportButton = row.qr_code
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.qr_code}">Report View</button>`
+            const ReportButton = row.report_path
+                ? `<button class="btn btn-sm btn-primary" onclick="window.open('${row.report_path}', '_blank')">Report</button>`
                 : "";
 
             tr.innerHTML = `
@@ -414,6 +419,7 @@ function populateTable(data, table_name) {
                 <td>${row.vehicle_number}</td>
                 <td>${row.vendor_name}</td>
                 <td>${row.vendor_code}</td>
+                <td>${row.bucket_no}</td>
                 <td>${VehicleImgButton}</td>
                 <td>${Img1Button}</td>
                 <td>${Img2Button}</td>
@@ -591,7 +597,7 @@ document.getElementById('submitVehicleDetailsBtn').addEventListener("click", fun
         vehicleNumber: vehicleNumber,
         vendorName: vendorNameInput,
         vendorCode: vendorCodeInput,
-        bucketNo: bucketNo,
+        // bucketNo: bucketNo,
     };
 
     fetch(`/api/add_vehicle/`, {

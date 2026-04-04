@@ -30,7 +30,7 @@ POSITION_CONFIRMATION_TIMEOUT = 120
 CLOSE_CYCLE_WAIT_TIME = 60 # Wait time after close cycle command before checking for completion - allows PLC to process command and start movement
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 
-BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', '/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/')
+BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', '/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING')
 TEMP_IMG_PATH = BASE_FILE_PATH + "TEMP_IMG/"
 RESULT_IMG_PATH = BASE_FILE_PATH + "RESULT/"
 INF_IMG = BASE_FILE_PATH + "INF/"
@@ -191,11 +191,11 @@ def db_find_vehicle(rfid: str) -> dict | None:
             LEFT JOIN VENDOR_MASTER vr 
                 ON vr.VENDOR_CODE = vm.VENDOR_CODE
             LEFT JOIN VEHICLE_LOGS vl 
-                ON vl.RFIDS LIKE CONCAT('%', vm.RFID, '%')
+                ON vl.RFIDS LIKE CONCAT('%%', vm.RFID, '%%')
                 AND vl.CREATE_TIME = (
                     SELECT MAX(vl2.CREATE_TIME)
                     FROM VEHICLE_LOGS vl2
-                    WHERE vl2.RFIDS LIKE CONCAT('%', vm.RFID, '%')
+                    WHERE vl2.RFIDS LIKE CONCAT('%%', vm.RFID, '%%')
                 )
             WHERE vm.RFID = %s
             LIMIT 1
@@ -697,8 +697,9 @@ class Manager:
             db_add_plc_comm(self.uid, self.state.name)
             self._goto(State.OPEN_BARRIER)
         else:
+            bucket_no = 1
             print("[MANAGER] RFID not in DB — will poll …")
-            db_create_log(self.uid, self.rfids, self.paths)
+            db_create_log(self.uid, self.rfids, bucket_no, self.paths)
             self._db_last_polled = time.time()
             self._goto(State.WAITING_FOR_DB)
 
@@ -721,6 +722,7 @@ class Manager:
             vendor_code = vehicle.get("VENDOR_CODE")
             bucket_no = db_resolve_bucket(self.rfids[0], vendor_code)
             db_bucket_update_log(self.uid, bucket_no)
+            db_add_plc_comm(self.uid, self.state.name)
 
             print(f"[MANAGER] Vehicle now in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
             logger.debug(f"Vehicle now in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
@@ -734,7 +736,7 @@ class Manager:
         
         vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
         vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
-        self._printer(action="send_data", vendor_name=vendor_name.upper().strip(), vehicle_number=vehicle_number.upper().strip(), dtstamp=self.uid.replace("_", ""))
+        self._printer(action="send_data", vendor_name=vendor_name.replace(" ", "").upper(), vehicle_number=vehicle_number.replace(" ", "").upper(), dtstamp=self.uid.replace("_", ""))
         
         self._goto(State.BARRIER_OPENING)
 

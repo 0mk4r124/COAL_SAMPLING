@@ -18,9 +18,9 @@
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#HISTORY">HISTORY</button>
         </li>
         <li class="nav-item">
-            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#VEHICLE_MASTER">VEHICLE MASTER</button>
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#VEHICLEMASTER">VEHICLE MASTER</button>
         </li>
-        <li class="nav-item active">
+        <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#HEALTH">HEALTH STATUS</button>
         </li>
     </ul>
@@ -115,7 +115,7 @@
                             <button class="btn btn-success mx-2 w-30" onclick="fetchHistoryData()">Fetch Data</button>
                         </div>
                         <div class="col-md-6 d-flex align-items-center">
-                            <button class="btn btn-success mx-2 w-30" >Download Data</button> <!-- onclick="fetchHISTORYData()" -->
+                            <button class="btn btn-success ms-5" onclick="downloadHistoryData()">Download CSV</button>
                         </div>
                     </div>
                 </div>
@@ -131,11 +131,12 @@
                                 <th>VEHICLE NUMBER</th>
                                 <th>VENDOR NAME</th>
                                 <th>VENDOR CODE</th>
+                                <th>BUCKET</th>
                                 <th>VIEW VEHICLE IMAGE</th>
-                                <th>VIEW IMAGE 1</th>
-                                <th>VIEW IMAGE 2</th>
-                                <th>VIEW IMAGE 3</th>
-                                <th>QR CODE</th>
+                                <th>SAMPLE IMAGE 1</th>
+                                <th>SAMPLE IMAGE 2</th>
+                                <th>SAMPLE IMAGE 3</th>
+                                <th>REPORT</th>
                             </tr>
                         </thead>
                         <tbody id="History_body"></tbody>
@@ -147,20 +148,21 @@
     </div>
 
     <!-- Vehicle Tab -->
-    <div class="tab-pane fade" id="VEHICLE_MASTER">
+    <div class="tab-pane fade" id="VEHICLEMASTER">
         <div class="card shadow-sm">
             <div class="card-body">
 
-                <div class="d-flex justify-content-between mb-3">
-                    <button class="btn btn-primary" onclick="fetchVehicleMaster()">Fetch Data</button>
-                    <button class="btn btn-success" onclick="downloadVehicleMaster()">Download CSV</button>
-                    <button class="btn btn-success" onclick="uploadVehicleMaster()">Upload Data</button>
+                <div class="d-flex justify-content-end ms-5 mb-3">
+                    <button class="btn btn-primary ms-5" onclick="fetchVehicleMaster()">Fetch Data</button>
+                    <button class="btn btn-success ms-5" onclick="downloadVehicleMaster()">Download CSV</button>
+                    <button class="btn btn-success ms-5" onclick="uploadVehicleMaster()">Upload Data</button>
                 </div>
 
                 <div class="table-responsive">
                     <table class="table table-bordered table-sm text-center">
                         <thead class="table-dark">
                             <tr>
+                                <th>S. No.</th>
                                 <th>RFID</th>
                                 <th>Vehicle Number</th>
                                 <th>Vendor Name</th>
@@ -177,7 +179,7 @@
         </div>
     </div>
 
-    <div class="tab-pane fade show active" id="HEALTH">
+    <div class="tab-pane fade show" id="HEALTH">
         <div class="card shadow-sm">
             <div class="card-body">
 
@@ -284,11 +286,11 @@
                             placeholder="Enter Vendor Code">
                     </div>
                     <!-- Becket Number -->
-                    <div class="mb-3">
+                    <!-- <div class="mb-3">
                         <label class="form-label fw-bold fs-3 mx-3">Bucket Number</label>
                         <input type="text" class="form-control form-control-lg" id="bucketNoInput"
                             placeholder="Enter Bucket Number">
-                    </div>
+                    </div> -->
 
                 </form>
             </div>
@@ -471,7 +473,8 @@
                 <input id="edit_vendor_code" class="form-control mb-2" placeholder="Vendor Code">
             </div>
             <div class="modal-footer">
-                <button class="btn btn-primary" onclick="submitVehicleEdit()">Save</button>
+                <button type="button" class="btn btn-secondary btn-lg" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-primary btn-lg" onclick="submitVehicleEdit()">Save</button>
             </div>
         </div>
     </div>
