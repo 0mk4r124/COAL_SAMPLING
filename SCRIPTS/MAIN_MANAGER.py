@@ -30,11 +30,11 @@ POSITION_CONFIRMATION_TIMEOUT = 120
 CLOSE_CYCLE_WAIT_TIME = 60 # Wait time after close cycle command before checking for completion - allows PLC to process command and start movement
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 
-BASE_DIR = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/"
-TEMP_IMG_PATH = BASE_DIR + "TEMP_IMG/"
-RESULT_IMG_PATH = BASE_DIR + "RESULT/"
-INF_IMG = BASE_DIR + "INF/"
-LOGS_PATH = BASE_DIR + "LOGS/"
+BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', '/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/')
+TEMP_IMG_PATH = BASE_FILE_PATH + "TEMP_IMG/"
+RESULT_IMG_PATH = BASE_FILE_PATH + "RESULT/"
+INF_IMG = BASE_FILE_PATH + "INF/"
+LOGS_PATH = BASE_FILE_PATH + "LOGS/"
 
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)

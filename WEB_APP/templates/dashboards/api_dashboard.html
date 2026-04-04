@@ -12,7 +12,7 @@
     <!-- Left Tabs -->
     <ul class="nav nav-tabs flex-grow-1" style="padding: 7px;">
         <li class="nav-item">
-            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#DASHBOARD">DASHBOARD</button>
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#DASHBOARD">DASHBOARD</button>
         </li>
         <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#HISTORY">HISTORY</button>
@@ -20,7 +20,7 @@
         <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#VEHICLE_MASTER">VEHICLE MASTER</button>
         </li>
-        <li class="nav-item">
+        <li class="nav-item active">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#HEALTH">HEALTH STATUS</button>
         </li>
     </ul>
@@ -70,11 +70,23 @@
     </div>
 
     <!-- History Tab -->
-    <div class="tab-pane fade show" id="VEHICLE">
+    <div class="tab-pane fade show" id="HISTORY">
         <div class="card shadow-sm">
             <div class="card-body">
                 <!-- Filters -->
                 <div class="row g-3 align-items-end mb-3">
+
+                    <!-- Calender -->
+                    <div class="col-md-2 d-flex align-items-start">
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text h-100"><i class="far fa-calendar-alt"></i></span>
+                                </span>
+                            </div>
+                            <input type="text" id="date_range" name="date_range" class="form-control"
+                                placeholder="Select Planned Date Range" autocomplete="off">
+                        </div>
+                    </div>
 
                     <!-- Search Vehicle Number -->
                     <div class="col-md-3 d-flex align-items-start">
@@ -82,7 +94,7 @@
                             <div class="input-group-prepend">
                                 <span class="input-group-text h-100"><i class="fas fa-search"></i></span>
                             </div>
-                            <input type="text" id="vehicle_num_search" name="vehicle_num_search"
+                            <input type="text" id="vehicle_number_search" name="vehicle_number_search"
                                 class="form-control" placeholder="Search Vehicle Number" autocomplete="off">
                         </div>
                     </div>
@@ -100,10 +112,10 @@
 
                     <div class="col-md-4 d-flex align-items-start row">
                         <div class="col-md-6 d-flex align-items-center">
-                            <button class="btn btn-success mx-2 w-30" onclick="fetchVehicleData()">Fetch Data</button>
+                            <button class="btn btn-success mx-2 w-30" onclick="fetchHistoryData()">Fetch Data</button>
                         </div>
                         <div class="col-md-6 d-flex align-items-center">
-                            <button class="btn btn-success mx-2 w-30" onclick="downloadHistoryData()">Download Data</button>
+                            <button class="btn btn-success mx-2 w-30" >Download Data</button> <!-- onclick="fetchHISTORYData()" -->
                         </div>
                     </div>
                 </div>
@@ -111,7 +123,7 @@
 
                 <!-- HUH Table -->
                 <div class="table-responsive">
-                    <table class="table table-bordered table-sm align-middle text-center" id="VEHICLE_table">
+                    <table class="table table-bordered table-sm align-middle text-center" id="HISTORY_table">
                         <thead class="table-dark">
                             <tr>
                                 <th>SNo.</th>
@@ -119,23 +131,20 @@
                                 <th>VEHICLE NUMBER</th>
                                 <th>VENDOR NAME</th>
                                 <th>VENDOR CODE</th>
-                                <th>VEHICLE IMAGE</th>
-                                <th>SAMPLE 1 IMAGE</th>
-                                <th>SAMPLE 2 IMAGE</th>
-                                <th>SAMPLE 3 IMAGE</th>
+                                <th>VIEW VEHICLE IMAGE</th>
+                                <th>VIEW IMAGE 1</th>
+                                <th>VIEW IMAGE 2</th>
+                                <th>VIEW IMAGE 3</th>
                                 <th>QR CODE</th>
-                                <th>BUCKET NUMBER</th>
                             </tr>
                         </thead>
-                        <tbody id="Vehicle_body"></tbody>
+                        <tbody id="History_body"></tbody>
                     </table>
                 </div>
-                <div id="pagination-vehicle" class="d-flex justify-content-between mt-3 py-2"></div>
+                <div id="pagination-history" class="d-flex justify-content-between mt-3 py-2"></div>
             </div>
         </div>
     </div>
-
-
 
     <!-- Vehicle Tab -->
     <div class="tab-pane fade" id="VEHICLE_MASTER">

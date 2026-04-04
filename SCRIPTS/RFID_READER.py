@@ -1,14 +1,15 @@
 import socket
 import time
-import uuid
 import traceback
+import os
+
 from datetime import datetime
 
 from DEPENDANT.MQTT import MQTT
 from DEPENDANT.LOGGING import initializeLogger
 
-BASE_DIR = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/"
-LOGS_PATH = BASE_DIR + "LOGS/"
+BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', '/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/')
+LOGS_PATH = BASE_FILE_PATH + "LOGS/"
 
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)

@@ -14,31 +14,37 @@ from PyQt5.QtGui import QFont
 from tendo import singleton
 me = singleton.SingleInstance()
 
-BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
+# BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
+# SERVICES = {
+#     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
+#     "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS\\CAM_CAPTURE.py",
+#     "Printer": fr"{BASE_FILE_PATH}SCRIPTS\\PRINTER.py",
+#     "Logic": fr"{BASE_FILE_PATH}SCRIPTS\\MAIN_MANAGER.py",
+#     "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_BARRIER.py",
+#     "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_SAMPLER.py",
+#     "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
+#     # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
+#     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
+#     "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
+# }
+# PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
+# CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
+
+BASE_FILE_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/"
 SERVICES = {
     # "PLC": fr"{BASE_FILE_PATH}SCRIPTS\PLC_COMM.py",
-    "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS\\CAM_CAPTURE.py",
-    "Printer": fr"{BASE_FILE_PATH}SCRIPTS\\PRINTER.py",
-    "Logic": fr"{BASE_FILE_PATH}SCRIPTS\\MAIN_MANAGER.py",
-    "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_BARRIER.py",
-    "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_SAMPLER.py",
-    "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
-    # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
+    # "Image Capture": fr"{BASE_FILE_PATH}SCRIPTS/CAM_CAPTURE.py",
+    # "Printer": fr"{BASE_FILE_PATH}SCRIPTS/PRINTER.py",
+    "Logic": fr"{BASE_FILE_PATH}SCRIPTS/MAIN_MANAGER.py",
+    # "Boom Barrier PLC": fr"{BASE_FILE_PATH}SCRIPTS/PLC_BARRIER.py",
+    # "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS/PLC_SAMPLER.py",
+    # "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS/RFID_READER.py",
+    "TEST": fr"{BASE_FILE_PATH}SCRIPTS/TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
-    "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
+    "Django": fr"{BASE_FILE_PATH}WEB_APP/manage.py runserver"
 }
-PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
-CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
-
-# BASE_FILE_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/STANDARD_TEMPLATE/DJANGO_SCRIPTS_FRAMEWORK/STANDARD_FRAMEWORK/"
-# SERVICES = {
-#     # "PLC": f"{BASE_FILE_PATH}SCRIPTS/PLC_COMM.py",
-#     # "Frame Capture": f"{BASE_FILE_PATH}SCRIPTS/FRAME_CAPTURE.py",
-#     "Logic": f"{BASE_FILE_PATH}SCRIPTS/LOGIC.py",
-#     "Django": f"{BASE_FILE_PATH}WEB_APP/manage.py runserver"
-# }
-# PYTHON_EXE = "/home/omkar/INSIGHTZZ/PROJECTS/STANDARD_TEMPLATE/DJANGO_SCRIPTS_FRAMEWORK/venv/bin/python"
-# CHROME_PATH = "/usr/bin/google-chrome"  # Adjust if different
+PYTHON_EXE = "/home/omkar/venv/bin/python"
+CHROME_PATH = "/usr/bin/google-chrome"  # Adjust if different
 
 def set_status_color(label: QLabel, status: str, name: str = ""):
     """Helper to color status labels."""
@@ -149,6 +155,11 @@ class ServiceTab(QWidget):
 
         # Create process
         self.process = QProcess(self)
+        
+        # Set environment variables for the process
+        env = self.process.processEnvironment()
+        env.insert("BASE_FILE_PATH", BASE_FILE_PATH)
+        self.process.setProcessEnvironment(env)
         # merge channels so stdout/stderr come together
         try:
             self.process.setProcessChannelMode(QProcess.MergedChannels)
