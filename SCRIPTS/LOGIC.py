@@ -100,6 +100,7 @@ def _validate_cam1_region(image_path: str) -> bool:
             return False
         
         allowed_classes = {"COAL", "TRUCK_BODY"}
+        found_classes = []
         for detection in labellist:
             if len(detection) < 6:
                 continue
@@ -112,6 +113,8 @@ def _validate_cam1_region(image_path: str) -> bool:
 
             if (y_x1 >= x1 and y_x2 <= x2 and y_y1 >= y1 and y_y2 <= y2):
                 logger.info(f"CAM1: Yellow box is 100% inside green box {class_name}")
+                found_classes.add(class_name)
+                cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 3)
                 if class_name not in allowed_classes:
                     logger.warning(f"CAM1: Invalid class {class_name} detected inside yellow box")
                     cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 0, 255), 3)  # Red for invalid
@@ -122,6 +125,11 @@ def _validate_cam1_region(image_path: str) -> bool:
                     continue
     
         # Save visualization
+        if not failed:
+            if not allowed_classes.issubset(found_classes):
+                missing = allowed_classes - found_classes
+                logger.warning(f"CAM1: Missing required classes inside yellow box: {missing}")
+                failed = True
         cv2.imwrite(f"{image_path.split('.')[0]}_vis.jpg", vis_img)
         logger.debug(f"CAM1: Detection results saved to {image_path.split('.')[0]}_vis.jpg")
         return not failed

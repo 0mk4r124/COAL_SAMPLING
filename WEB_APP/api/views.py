@@ -57,28 +57,34 @@ class APIDashboardView(TemplateView):
         return context
     
 def serve_file(request):
-    # Get the full URL parameter
     file_param = request.GET.get('file')
     if not file_param:
         return HttpResponse("File parameter missing", status=400)
 
-    # Remove query string if any (like ?t=...)
-    parsed = urlparse(file_param)
-    file_path = unquote(parsed.path)  # decode spaces and URL chars
+    # Direct decode (NO urlparse)
+    file_path = unquote(file_param)
 
-    # Check if file exists
+    # Fix malformed paths
+    file_path = file_path.replace("c://", "c:/")
+    file_path = file_path.replace("//", "/")
+    file_path = os.path.normpath(file_path)
+
+    print("FINAL PATH:", file_path)  # debug
+
     if os.path.exists(file_path):
         try:
-            # Determine MIME type based on extension
             ext = os.path.splitext(file_path)[1].lower()
             content_type = 'image/jpeg' if ext in ['.jpg', '.jpeg'] else 'application/octet-stream'
             return FileResponse(open(file_path, 'rb'), content_type=content_type)
         except Exception as e:
             return HttpResponse(f"Error reading file: {str(e)}", status=500)
     else:
-        # Return a placeholder response instead of 404
-        return HttpResponse(f"Image file not found on this server: {os.path.basename(file_path)}", status=404, content_type='text/plain')
-
+        return HttpResponse(
+            f"Image file not found on this server: {file_path}",
+            status=404,
+            content_type='text/plain'
+        )
+    
 def live_ip_camera(request):
     try: 
         camera_paths = [
@@ -250,7 +256,7 @@ def fetch_history_data(request):
         vendor_code=Subquery(vehicle_master_qs.values('vendor_code')[:1]),
     ).annotate(
         vendor_name=Subquery(vendor_master_qs.values('vendor_name')[:1]),
-    ).order_by("create_time")
+    ).order_by("-create_time")
 
     # ---- Filters (after annotation) ----
     if vehicle_number:

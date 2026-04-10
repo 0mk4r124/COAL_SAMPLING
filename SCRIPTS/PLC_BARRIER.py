@@ -47,7 +47,7 @@ class BarrierController:
 
     def open_barrier(self):
         try:
-            print("[PLC_BARRIER] Opening barrier …")
+            print("[PLC_BARRIER] Opening barrier ")
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_OPEN, 1)
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_CLOSE, 0)
 
@@ -73,7 +73,7 @@ class BarrierController:
 
     def close_barrier(self):
         try:
-            print("[PLC_BARRIER] Closing barrier …")
+            print("[PLC_BARRIER] Closing barrier ")
             
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_OPEN, 0)
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_CLOSE, 1)
@@ -85,7 +85,7 @@ class BarrierController:
                 open_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_OPEN_FB)
                 close_bit = self.plc.readIntFromPLC(self.client, BOOM_BARRIER_CLOSE_FB)
                 if (open_bit == 0) and (close_bit == 1):
-                    print("[PLC_BARRIER] Barrier OPEN confirmed.")
+                    print("[PLC_BARRIER] Barrier CLOSE confirmed.")
                     self.mqtt.publish(TOPIC_OUT, {"status": "barrier_closed"})
                     return
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
@@ -99,7 +99,7 @@ class BarrierController:
 
     def green_signal(self):
         try:
-            print("[PLC_BARRIER] Green Signal …")
+            print("[PLC_BARRIER] Green Signal ")
             self.plc.writeIntToPLC(self.client, GREEN_SIGNAL, 1)
             self.plc.writeIntToPLC(self.client, RED_SIGNAL, 0)
             self.mqtt.publish(TOPIC_OUT, {"status": "green_sent"})
@@ -110,7 +110,7 @@ class BarrierController:
 
     def red_signal(self):
         try:
-            print("[PLC_BARRIER] Red Signal …")
+            print("[PLC_BARRIER] Red Signal ")
             self.plc.writeIntToPLC(self.client, RED_SIGNAL, 1)
             self.plc.writeIntToPLC(self.client, GREEN_SIGNAL, 0)
             self.mqtt.publish(TOPIC_OUT, {"status": "red_sent"})
@@ -122,12 +122,13 @@ class BarrierController:
     def set_bucket(self, bucket_number):
         try:
             
-            print("[PLC_BARRIER] Red Signal …")
+            print("[PLC_BARRIER] TRUN_TABLE_CLOCKWISE ")
             self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 1)
 
             while True:
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 home_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_HOME_P)
+                print(f"[PLC_BARRIER] home_bit {home_bit} ")
                 if home_bit == 1:
                     self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 0)
                     time.sleep(2)
@@ -138,11 +139,14 @@ class BarrierController:
                 time.sleep(0.5)
                 
             self.plc.writeIntToPLC(self.client, TRUN_TABLE_VALUE_WRITE, bucket_number)
+            time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 1)
+            print(f"[PLC_BARRIER] TRUN_TABLE_COUNT {bucket_number} ")
 
             while True:
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 bucket_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_COUNT_READ)
+                print(f"[PLC_BARRIER] bucket_bit {bucket_bit} ")
                 if bucket_bit == bucket_number: 
                     self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 0)
                     self.mqtt.publish(TOPIC_OUT, {"status": "bucket_set"})
@@ -174,11 +178,11 @@ class BarrierController:
     def reset(self):
         """Reset all PLC outputs to 0"""
         try:
-            print("[PLC_BARRIER] Resetting PLC outputs …")
+            print("[PLC_BARRIER] Resetting PLC outputs ")
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_OPEN, 0)
             self.plc.writeIntToPLC(self.client, BOOM_BARRIER_CLOSE, 0)
-            self.plc.writeIntToPLC(self.client, RED_SIGNAL, 0)
-            self.plc.writeIntToPLC(self.client, GREEN_SIGNAL, 0)
+            # self.plc.writeIntToPLC(self.client, RED_SIGNAL, 0)
+            # self.plc.writeIntToPLC(self.client, GREEN_SIGNAL, 0)
             self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 0)
             self.plc.writeIntToPLC(self.client, TRUN_TABLE_CLOCKWISE, 0)
             self.mqtt.publish(TOPIC_OUT, {"status": "reset_done"})
@@ -190,11 +194,11 @@ class BarrierController:
 
     def run(self):
         self.mqtt.subscribe(TOPIC_IN)
-        print("[PLC_BARRIER] Ready, waiting for commands …")
+        print("[PLC_BARRIER] Ready, waiting for commands ")
 
         while True:
             try:
-                self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+                if not self.plc.writeIntToPLC(self.client, HEARTBIT, 0): break
 
                 data = self.mqtt.data
 
@@ -208,11 +212,12 @@ class BarrierController:
                     elif action == "close_barrier":
                         self.close_barrier()
                     elif action == "check_truck":
+                        # self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
                         if self.truck_present():
                             self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
                         else:
                             self.mqtt.publish(TOPIC_OUT, {"status": "truck_not_present"})
-                        time.sleep(1)
+                        time.sleep(0.5)
                     elif action == "set_bucket":
                         print(f"[PLC_BARRIER] Setting Bucket")
                         self.set_bucket(bucket_no)
@@ -225,7 +230,7 @@ class BarrierController:
                     else:
                         print(f"[PLC_BARRIER] Unknown action: {action}")
 
-                self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
+                if not self.plc.writeIntToPLC(self.client, HEARTBIT, 1): break
                 time.sleep(0.5)
 
             except Exception as e:
@@ -234,8 +239,13 @@ class BarrierController:
             time.sleep(0.05)
 
 def main():
-    controller = BarrierController()
-    controller.run()
+    while True:
+        controller = BarrierController()
+        controller.run()
+
+        del controller
+
+        time.sleep(2)
 
 if __name__ == "__main__":
     main()

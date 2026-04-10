@@ -214,7 +214,7 @@ class ServiceTab(QWidget):
             self.process = None
             return
 
-        set_status_color(self.status_label, "Starting...", "Status")
+        set_status_color(self.status_label, "Running", "Status")
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.restart_btn.setEnabled(True)

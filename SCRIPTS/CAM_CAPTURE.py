@@ -74,18 +74,23 @@ class CamController:
             ok = cam.initialize()
             logger.info(f"{name} init  {'OK' if ok else 'FAILED'}")
 
-    def _capture(self, cam_name: str, save_path: str) -> str:
+    def _capture(self, cam_name: str, save_path: str, retries: int = 10, delay: float = 0.2) -> str:
         try:
-            with self._lock:
-                img = self._last_frame.get(cam_name)
+            for attempt in range(1, retries + 1):
+                with self._lock:
+                    img = self._last_frame.get(cam_name)
 
-            if img is None:
-                logger.warning(f"{cam_name} no frame available from background thread")
-                return None
+                if img is not None:
+                    path = save_frame(img, save_path)
+                    logger.info(f"{cam_name} single capture (from buffer) saved: {path}")
+                    return path
 
-            path = save_frame(img, save_path)
-            logger.info(f"{cam_name} single capture (from buffer) saved: {path}")
-            return path
+                logger.warning(f"{cam_name} no frame available (attempt {attempt}/{retries})")
+                time.sleep(delay)
+
+            # After all retries
+            logger.error(f"{cam_name} failed to capture after {retries} attempts")
+            return None
 
         except Exception as e:
             logger.error(f"{cam_name} single capture error: {e}", exc_info=True)
@@ -98,9 +103,10 @@ class CamController:
         while self._bg_active:
             try:
                 img = self.cams[cam_name].capture(save=False)
-                if cam_name in ["CAM3", "CAM2"]: img = cv2.flip(img, 1)
+                
                 if img is not None:
                     with self._lock:
+                        if cam_name in ["CAM3", "CAM2"]: img = cv2.flip(img, 1)
                         self._last_frame[cam_name] = img
                         self._thread_last_alive[cam_name] = time.time()
                     
@@ -114,7 +120,7 @@ class CamController:
                     # Save 50% reduced resolution for quick loading
                     save_frame_reduced(img, temp_reduced_path, scale=0.5)
                     
-                    logger.debug(f"{cam_name} captured: full={temp_full_path}, reduced={temp_reduced_path}")
+                    print(f"{cam_name} captured")
                 
             except Exception as e:
                 logger.error(f"{cam_name} background capture error: {e}", exc_info=True)

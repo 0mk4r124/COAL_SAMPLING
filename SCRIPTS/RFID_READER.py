@@ -12,7 +12,7 @@ BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PROD
 LOGS_PATH = BASE_FILE_PATH + "LOGS/"
 
 # Initialize logger
-logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
+logger = initializeLogger("RFID_READER", LOGS_PATH=LOGS_PATH)
 
 TCP_IP = "192.168.1.200"
 TCP_PORT = 100
@@ -57,6 +57,7 @@ def main():
                             last_seen = time.time()
                             session_active = True
                             rfids = set()
+                            print(f"[RFID] Session started: {session_uid}")
                             logger.info(f"Session started: {session_uid}")
 
                         if rfid not in rfids:
@@ -86,7 +87,7 @@ def main():
                     last_seen = None
                     rfids = set()
                     end_time = time.time()
-                    while (time.time() - end_time) < 500:
+                    while (time.time() - end_time) < 300:
                         try: data = s.recv(BUFFER_SIZE)
                         except: pass
 

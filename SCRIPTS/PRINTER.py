@@ -26,7 +26,6 @@ class Printer:
         self.mqtt.subscribe(TOPIC_IN)
 
         self._running = True
-        self._lock = threading.Lock()
 
     # ───────────────────────────────────────── CRC ───────────────────────── #
 
@@ -74,10 +73,9 @@ class Printer:
         return '[{"GroupName":"G1","SelectMessage":"VAHICALDATA","ResetMessage":true,"Action":"Stop"}]'
 
     def _data_json(self, vendor, vehicle, dt):
-        return (
-            '{"MessageName":"VAHICALDATA","KeyValue":[{'
-            f'"Eth_0":"{vehicle}",'
-            f'"Eth_1":"{vendor}",'
+        return ( '{"MessageName":"VAHICALDATA","KeyValue":[{'
+            f'"Eth_0":"{vehicle}|{vendor}|{dt}",'
+            f'"Eth_1":"{vehicle}",'
             f'"Eth_2":"{dt}"'
             '}]}'
         )
@@ -109,36 +107,33 @@ class Printer:
     # ───────────────────────────────────────── ACTIONS ───────────────────────── #
 
     def start(self):
-        with self._lock:
-            self.connect()
-            pkt = self._build_packet("A55A02050100", self._start_json())
-            self._send(pkt, "START")
+        self.connect()
+        pkt = self._build_packet("A55A02050100", self._start_json())
+        self._send(pkt, "START")
 
     def send_data(self, vendor_name: str, vehicle_number: str, dtstamp: str):
-        with self._lock:
-            self.connect()
+        self.connect()
 
-            # Start
-            self.start()
-            time.sleep(2)
+        # Start
+        self.start()
+        time.sleep(10)
 
-            # Data
-            pkt = self._build_packet(
-                "A55A01100100",
-                self._data_json(vendor_name, vehicle_number, dtstamp)
-            )
-            self._send(pkt, "DATA")
+        # Data
+        pkt = self._build_packet(
+            "A55A01100100",
+            self._data_json(vendor_name, vehicle_number, dtstamp)
+        )
+        self._send(pkt, "DATA")
 
     def stop(self):
-        with self._lock:
-            if not self.sock:
-                return
+        if not self.sock:
+            return
 
-            pkt = self._build_packet("A55A02050100", self._stop_json())
-            self._send(pkt, "STOP")
+        pkt = self._build_packet("A55A02050100", self._stop_json())
+        self._send(pkt, "STOP")
 
-            time.sleep(1)
-            self.disconnect()
+        time.sleep(1)
+        self.disconnect()
 
     # ───────────────────────────────────────── MQTT LOOP ───────────────────────── #
 

@@ -143,6 +143,10 @@ document.getElementById("vehicleNumberInput").addEventListener("input", function
     this.value = this.value.toUpperCase();
 });
 
+document.getElementById('vehicleDetailsModal').addEventListener('hidden.bs.modal', function () {
+    vehicleDetailsModalOpen = false;
+});
+
 function updateCurrentStatus() {
     "use strict";
     fetch('/api/get_current_status/')
@@ -410,7 +414,7 @@ function populateTable(data, table_name) {
                 ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_3_image}">Sample View</button>`
                 : "";
             const ReportButton = row.report_path
-                ? `<button class="btn btn-sm btn-primary" onclick="window.open('${row.report_path}', '_blank')">Report</button>`
+                ? `<button class="btn btn-sm btn-primary" onclick="window.open('/api/serve-file/?file=${encodeURIComponent(row.report_path)}', '_blank')">Report</button>`
                 : "";
 
             tr.innerHTML = `
@@ -779,30 +783,24 @@ function resetActivityTimer() {
 // Initialize
 document.addEventListener('DOMContentLoaded', function() {
 
-    async function pollSystem() {
-        try {
-            await fetchSystemStatus();
-            await updateCurrentStatus();
-            await updateCameraImages();
-        } catch (err) {
-            console.error("Polling error:", err);
-        }
-    }
+    // First run
+    fetchSystemStatus();
+    updateCurrentStatus();
+    updateCameraImages();
 
-    // Initial run
-    pollSystem();
-
-    // Single polling loop
-    setInterval(pollSystem, 2000);
+    // Polling loop
+    setInterval(fetchSystemStatus, 5000);
+    setInterval(updateCurrentStatus, 2000);
+    setInterval(updateCameraImages, 2000);
 
     // Smart refresh
     setInterval(() => {
         const now = Date.now();
         const inactivityDuration = now - lastActivityTime;
     
-        const FIFTEEN_MIN = 15 * 60 * 1000;
+        const REFRESH_TIMEOUT = 30 * 60 * 1000;
     
-        if (inactivityDuration > FIFTEEN_MIN) {
+        if (inactivityDuration > REFRESH_TIMEOUT) {
             console.log("Auto-refreshing due to inactivity");
             window.location.reload();
         }

@@ -56,13 +56,11 @@ class SamplerController:
     def check_auto_manual(self):
         auto_manual = 0
         try:
-
             auto_manual = self.plc.readIntFromPLC(self.client, AUTO_MANUAL)
             print(auto_manual)
-            time.sleep(1)
-            
+            time.sleep(0.5)
         except Exception as e:
-            print(f"[PLC_BARRIER] Truck presence error: {e}")
+            print(f"[PLC_SAMPLER] Truck presence error: {e}")
 
         return auto_manual
     
@@ -70,11 +68,10 @@ class SamplerController:
         sample_cycle_complete = 0
         try:
             sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_STATUS)
-            
             print(sample_cycle_complete)
-            time.sleep(1)
+            time.sleep(0.5)
         except Exception as e:
-            print(f"[PLC_BARRIER] Truck presence error: {e}")
+            print(f"[PLC_SAMPLER] Truck presence error: {e}")
 
         return sample_cycle_complete
     
@@ -82,11 +79,10 @@ class SamplerController:
         sample_cycle_complete = 0
         try:
             sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_COMPLETE)
-            
             print(sample_cycle_complete)
-            time.sleep(1)
+            time.sleep(0.5)
         except Exception as e:
-            print(f"[PLC_BARRIER] Truck presence error: {e}")
+            print(f"[PLC_SAMPLER] Truck presence error: {e}")
 
         return sample_cycle_complete
 
@@ -497,11 +493,16 @@ class SamplerController:
             time.sleep(0.05)
 
 def main():
-    total_x = 70
+    total_x = 74
     total_y = 30
 
-    controller = SamplerController(total_x, total_y)
-    controller.run()
+    while True:
+        controller = SamplerController(total_x, total_y)
+        controller.run()
+
+        del controller
+
+        time.sleep(2)
 
 
 if __name__ == "__main__":
