@@ -21,6 +21,21 @@ from urllib.parse import unquote, urlparse
 
 # Create your views here.
 
+def build_rfid_key(rfids, uid=None):
+    if isinstance(rfids, str):
+        rfids = rfids.split("|")
+
+    rfids = [r.strip() for r in rfids if r and r.strip()]
+    rfids = sorted(set(rfids))
+
+    if not rfids:
+        return uid or ""
+
+    if len(rfids) == 1:
+        return f"{rfids[0]}|{uid}" if uid else rfids[0]
+
+    return "|".join(rfids)
+
 def to_naive(dt):
     if dt is None:
         return None
@@ -165,17 +180,16 @@ def add_vehicle(request):
             vendor_obj.save()
 
         # Create or update vehicle
-        rfid_list = rfid.split("|")
+        rfid_key = build_rfid_key(rfid)
 
-        for r in rfid_list:
-            VEHICLE_MASTER.objects.update_or_create(
-                rfid=r.strip(),
-                defaults={
-                    "vehicle_number": vehicle_number,
-                    "vendor_code": vendor_code,
-                    "create_time": timezone.now()
-                }
-            )
+        VEHICLE_MASTER.objects.update_or_create(
+            rfid=rfid_key,
+            defaults={
+                "vehicle_number": vehicle_number,
+                "vendor_code": vendor_code,
+                "create_time": timezone.now()
+            }
+        )
 
         return JsonResponse({
             "success": True,
@@ -212,36 +226,14 @@ def fetch_history_data(request):
         return JsonResponse({'error': 'Invalid date format'}, status=400)
 
     # ---- Subquery: Match RFID inside pipe-separated string ----
-    vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
-        rfid_wrapped=Concat(
-            Value('|'),
-            F('rfid'),
-            Value('|'),
-            output_field=CharField()
-        ),
-        rfids_wrapped=Concat(
-            Value('|'),
-            OuterRef('rfids'),
-            Value('|'),
-            output_field=CharField()
-        )
-    ).annotate(
-        match=Locate(F('rfid_wrapped'), F('rfids_wrapped'))
+    vehicle_master_qs = VEHICLE_MASTER.objects.filter(
+        rfid=OuterRef('rfids')
     ).filter(match__gt=0)
 
     # ---- Subquery: Vendor from vehicle ----
-    vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
-        rfid_wrapped=Concat(
-            Value('|'), F('rfid'), Value('|'),
-            output_field=CharField()
-        ),
-        rfids_wrapped=Concat(
-            Value('|'), OuterRef('rfids'), Value('|'),
-            output_field=CharField()
-        )
-    ).annotate(
-        match=Locate(F('rfid_wrapped'), F('rfids_wrapped'))
-    ).filter(match__gt=0)
+    # vehicle_master_qs = VEHICLE_MASTER.objects.filter(
+    #     rfid=OuterRef('rfids')
+    # ).filter(match__gt=0)
 
     vendor_master_qs = VENDOR_MASTER.objects.filter(
         vendor_code=OuterRef('vendor_code')
@@ -312,10 +304,7 @@ def download_history_data(request):
 
         # ---- SAME QUERY AS fetch_history_data ----
         vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
-            rfid_wrapped=Concat(Value('|'), F('rfid'), Value('|'), output_field=CharField()),
-            rfids_wrapped=Concat(Value('|'), OuterRef('rfids'), Value('|'), output_field=CharField())
-        ).annotate(
-            match=Locate(F('rfid_wrapped'), F('rfids_wrapped'))
+            rfid=OuterRef('rfids')
         ).filter(match__gt=0)
 
         vendor_master_qs = VENDOR_MASTER.objects.filter(
@@ -544,24 +533,19 @@ def get_current_status(request):
                 "auto_manual": None,
             })
 
-        # 2. Extract RFIDs
-        rfids = (current_vehicle.rfids or "").split("|")
-
         vehicle_obj = None
         vendor_obj = None
 
-        # 3. Find first matching RFID
-        for rfid in rfids:
-            rfid = rfid.strip()
-            if not rfid:
-                continue
+        # 2. Extract RFIDs
+        rfid_key = current_vehicle.rfids
+        vehicle_obj = VEHICLE_MASTER.objects.filter(rfid=rfid_key).first()
 
-            vehicle_obj = VEHICLE_MASTER.objects.filter(rfid=rfid).first()
-            if vehicle_obj:
-                vendor_obj = VENDOR_MASTER.objects.filter(
-                    vendor_code=vehicle_obj.vendor_code
-                ).first()
-                break
+        # 3. Find first matching RFID
+        vendor_obj = None
+        if vehicle_obj:
+            vendor_obj = VENDOR_MASTER.objects.filter(
+                vendor_code=vehicle_obj.vendor_code
+            ).first()
 
         # 4. If NO vehicle found → trigger ADD VEHICLE FLOW
         if not vehicle_obj:

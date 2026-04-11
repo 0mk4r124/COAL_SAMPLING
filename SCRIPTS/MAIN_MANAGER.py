@@ -41,6 +41,21 @@ LOGS_PATH = os.path.join(BASE_FILE_PATH, "LOGS")
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
+def build_rfid_key(rfids, uid=None):
+    if isinstance(rfids, str):
+        rfids = rfids.split("|")
+
+    rfids = [r.strip() for r in rfids if r and r.strip()]
+    rfids = sorted(set(rfids))
+
+    if not rfids:
+        return uid or ""
+
+    if len(rfids) == 1:
+        return f"{rfids[0]}|{uid}" if uid else rfids[0]
+
+    return "|".join(rfids)
+
 def normalize_path(path: str) -> str:
     return path.replace("\\", "/")
 
@@ -262,11 +277,13 @@ def db_resolve_bucket(rfid: str, vendor_code: str) -> int:
         if db:
             db.close()
 
-def db_find_vehicle(rfid: str) -> dict | None:
+def db_find_vehicle(rfids: str, uid: str) -> dict | None:
     db = None
     try:
         db  = _db_connect()
         cur = db.cursor(pymysql.cursors.DictCursor)
+
+        rfid_key = build_rfid_key(rfids, uid)
 
         cur.execute(
             """
@@ -274,22 +291,14 @@ def db_find_vehicle(rfid: str) -> dict | None:
                 vm.RFID,
                 vm.VEHICLE_NUMBER,
                 vm.VENDOR_CODE,
-                vr.VENDER_NAME,
-                vl.BUCKET_NO
+                vr.VENDOR_NAME
             FROM VEHICLE_MASTER vm
             LEFT JOIN VENDOR_MASTER vr 
                 ON vr.VENDOR_CODE = vm.VENDOR_CODE
-            LEFT JOIN VEHICLE_LOGS vl 
-                ON vl.RFIDS LIKE CONCAT('%%', vm.RFID, '%%')
-                AND vl.CREATE_TIME = (
-                    SELECT MAX(vl2.CREATE_TIME)
-                    FROM VEHICLE_LOGS vl2
-                    WHERE vl2.RFIDS LIKE CONCAT('%%', vm.RFID, '%%')
-                )
             WHERE vm.RFID = %s
             LIMIT 1
             """,
-            (rfid,)
+            (rfid_key,)
         )
 
         return cur.fetchone()
@@ -301,31 +310,29 @@ def db_find_vehicle(rfid: str) -> dict | None:
         if db:
             db.close()
 
-def db_vehicle_already_in_front(rfids_str: str) -> bool:
+def db_vehicle_already_in_front(rfids: list, uid: str) -> bool:
     db = None
     try:
         db = _db_connect()
         cur = db.cursor()
-        rfid_list = [r.strip() for r in rfids_str.split("|") if r.strip()]
-        if not rfid_list:
-            return False
 
-        placeholders = " OR ".join(
-            ["FIND_IN_SET(%s, REPLACE(RFIDS, '|', ',')) > 0"] * len(rfid_list)
-        )
-        query = f"""
+        rfid_key = build_rfid_key(rfids, uid)
+
+        query = """
             SELECT COUNT(*) FROM VEHICLE_LOGS
             WHERE STATUS = 'IN_PROGRESS'
-              AND ({placeholders})
+              AND RFIDS = %s
         """
-        cur.execute(query, rfid_list)
+        cur.execute(query, (rfid_key,))
         row = cur.fetchone()
+
         return (row[0] > 1) if row else False
     except Exception as e:
         print(f"[DB] db_vehicle_already_in_front error: {e}")
         logger.error(f"{traceback.format_exc()}")
     finally:
-        if db: db.close()
+        if db:
+            db.close()
 
 def db_create_log(uid: str, rfids: list, bucket_no: str, paths: dict) -> bool:
     db = None
@@ -352,7 +359,7 @@ def db_create_log(uid: str, rfids: list, bucket_no: str, paths: dict) -> bool:
                 %s
                 )
             """,
-            (uid, "|".join(rfids), "IN_PROGRESS", bucket_no,  now, 
+            (uid, build_rfid_key(rfids, uid), "IN_PROGRESS", bucket_no,  now, 
                 paths.get("VEHICLE_IMG_PATH"), 
                 paths.get("SAMPLE_1_IMG_PATH"), 
                 paths.get("SAMPLE_2_IMG_PATH"), 
@@ -590,10 +597,9 @@ class Manager:
         return time.time() - self._state_entered_at
 
     def _resolve_rfid(self, rfids: list) -> dict | None:
-        for rfid in rfids:
-            row = db_find_vehicle(rfid)
-            if row:
-                return row
+        row = db_find_vehicle(rfids, self.uid)
+        if row:
+            return row
         return None
     
     def _wait_for_file(self, check_path_1: str, check_path_3: str, timeout: float = 10.0) -> bool:
@@ -787,7 +793,8 @@ class Manager:
             print(f"[MANAGER] Vehicle found in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
             self.vehicle = vehicle
             vendor_code = vehicle.get("VENDOR_CODE")
-            bucket_no = str(db_resolve_bucket(self.rfids[0], vendor_code))
+            rfid_key = build_rfid_key(self.rfids, self.uid)
+            bucket_no = str(db_resolve_bucket(rfid_key, vendor_code))
             
             if db_vehicle_already_in_front("|".join(self.rfids)):
                 print("[MANAGER] Vehicle already in front — aborting.")
@@ -829,7 +836,9 @@ class Manager:
         if vehicle:
             self.vehicle = vehicle
             vendor_code = vehicle.get("VENDOR_CODE")
-            bucket_no = str(db_resolve_bucket(self.rfids[0], vendor_code))
+            
+            rfid_key = build_rfid_key(self.rfids, self.uid)
+            bucket_no = str(db_resolve_bucket(rfid_key, vendor_code))
             db_bucket_update_log(self.uid, bucket_no)
             db_add_plc_comm(self.uid, self.state.name)
             time.sleep(1)
