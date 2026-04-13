@@ -18,11 +18,10 @@ TCP_IP = "192.168.1.200"
 TCP_PORT = 100
 BUFFER_SIZE = 1024
 DEBOUNCE_WINDOW_SEC = 5.0
-TOPIC_OUT = "manager/rfid"
-TOPIC_IN = "rfid/control"
+TOPIC_OUT = "rfid/status"
+TOPIC_IN = "manager/rfid"
 
 ig_rfids = ["C80700000000000001F8"]
-# ig_rfids = []
 
 def main():
     mq = MQTT("RFID_READER")

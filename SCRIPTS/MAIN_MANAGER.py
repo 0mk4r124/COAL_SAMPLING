@@ -2,6 +2,7 @@ import os
 import time
 import random
 import pymysql
+import subprocess
 import traceback
 
 from datetime import datetime
@@ -26,17 +27,25 @@ DB_NAME = "COAL_SAMPLING_DHAR"
 DB_POLL_SEC     = 10 # Poll DB every x seconds while waiting for entry after RFID read
 DB_WAIT_TIMEOUT = 600 # Wait up to x seconds for DB entry to appear after RFID read before aborting
 TOTAL_CYCLES    = 3
-HOME_POSITION_TIMEOUT = 300 # Wait up to x seconds for auger to return to home position before aborting
+HOME_POSITION_TIMEOUT = 200 # Wait up to x seconds for auger to return to home position before aborting
 SAMPLE_CYCLE_TIMEOUT = 600
-POSITION_CONFIRMATION_TIMEOUT = 300
+POSITION_CONFIRMATION_TIMEOUT = 30
 CLOSE_CYCLE_WAIT_TIME = 50 # Wait time after close cycle command before checking for completion - allows PLC to process command and start movement
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
+MOVEMENT_DURATION = 2 # Duration to move in each direction during auger position confirmation loops (in seconds)
 
 BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 TEMP_IMG_PATH = os.path.join(BASE_FILE_PATH, "TEMP_IMG")
 RESULT_IMG_PATH = os.path.join(BASE_FILE_PATH, "RESULT")
 INF_IMG = os.path.join(BASE_FILE_PATH, "INF")
 LOGS_PATH = os.path.join(BASE_FILE_PATH, "LOGS")
+
+IN_TOPICS = (
+    "camera/status",
+    "plc_barrier/status",
+    "plc_sampler/status",
+    "rfid/status",
+)
 
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
@@ -120,7 +129,25 @@ def generate_sampling_report(report_data: dict) -> bool:
         # -------- SAVE --------
         os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
         pdf.output(pdf_path)
-
+        cmd = [
+            "gs",
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.4",
+            "-dPDFSETTINGS=/screen",   # strongest compression
+            "-dDownsampleColorImages=true",
+            "-dColorImageResolution=72",
+            "-dDownsampleGrayImages=true",
+            "-dGrayImageResolution=72",
+            "-dDownsampleMonoImages=true",
+            "-dMonoImageResolution=72",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH",
+            f"-sOutputFile={pdf_path}",
+            pdf_path
+        ]
+        subprocess.run(cmd)
+ 
         return True
 
     except Exception as e:
@@ -535,12 +562,7 @@ class Manager:
     def __init__(self):
         self.mqtt = MQTT("MAIN_MANAGER")
 
-        for topic in (
-            "manager/rfid",
-            "camera/status",
-            "plc_barrier/status",
-            "plc_sampler/status",
-        ):
+        for topic in IN_TOPICS:
             self.mqtt.subscribe(topic)
 
         self.state     = State.IDLE
@@ -554,7 +576,7 @@ class Manager:
         self.bucket_no : int         = 1  # Store bucket number for the session
         self._emergency_return_state: State | None = State.CYCLE_CONFIRM  # Track which state to resume to after emergency
 
-        self._state_entered_at: float = 0.0
+        self._state_entered_at: float = time.time()
         self._db_last_polled  : float = 0.0
         
         # AI Model initialization
@@ -578,6 +600,7 @@ class Manager:
     def _barrier(self, **kw): self.mqtt.publish("manager/plc_barrier", kw)
     def _sampler(self, **kw): self.mqtt.publish("manager/plc_sampler", kw)
     def _printer(self, **kw): self.mqtt.publish("manager/printer",     kw)
+    def _rfid(self, **kw):    self.mqtt.publish("manager/rfid",     kw)
 
     def _flush_topic(self, topic: str):
         flushed = 0
@@ -587,10 +610,11 @@ class Manager:
                 break
             flushed += 1
         print(f"[MANAGER] Flushed {flushed} messages from {topic}")
+        logger.debug(f"[MANAGER] Flushed {flushed} messages from {topic}")
 
     def _goto(self, new_state: State):
         print(f"[MANAGER] State: {self.state.name} --> {new_state.name}")
-        logger.info(f"State: {self.state.name} --> {new_state.name}")
+        logger.info(f"State: {self.state.name} --> {new_state.name} -- {self._elapsed():.1f}s")
         self.state             = new_state
         self._state_entered_at = time.time()
         
@@ -604,23 +628,40 @@ class Manager:
     def _resolve_rfid(self, rfids: list) -> dict | None:
         row = db_find_vehicle(rfids, self.uid)
         if row:
+            logger.debug(f"[DB] Vehicle resolved: {row}")
             return row
         return None
     
     def _wait_for_file(self, check_path_1: str, check_path_3: str, timeout: float = 10.0) -> bool:
         start = time.time()
+        cam1_done = False
+        cam3_done = False
 
         while time.time() - start < timeout:
             msg = self._pop("camera/status")
-            if msg and msg.get("status") == "cam1_done":
-                cam1_path = msg.get("path")
-                if os.path.exists(cam1_path) and (check_path_1 == cam1_path): cam1_done = True
-                time.sleep(0.05)
-            if msg and msg.get("status") == "cam3_done":
-                cam3_path = msg.get("path")
-                if os.path.exists(cam3_path) and (check_path_3 == cam3_path): cam3_done = True
-                time.sleep(0.05)
 
+            if msg:
+                status = msg.get("status")
+                path = msg.get("path")
+
+                if status == "cam1_done":
+                    if path == check_path_1 and os.path.exists(path):
+                        cam1_done = True
+                        print(f"[WAIT] CAM1 done: {path}")
+
+                elif status == "cam3_done":
+                    if path == check_path_3 and os.path.exists(path):
+                        cam3_done = True
+                        print(f"[WAIT] CAM3 done: {path}")
+
+            # Exit early if both done
+            if cam1_done and cam3_done:
+                return True
+
+            time.sleep(0.05)  # small yield, not 0.5
+
+        print(f"[MANAGER] Timeout → cam1={cam1_done}, cam3={cam3_done}")
+        logger.debug(f"Timeout → cam1={cam1_done}, cam3={cam3_done}")
         return False
     
     def _capture_images_for_confirmation(self, loop_num: int, movement_type: str = "") -> tuple[str, str] | None:
@@ -643,6 +684,7 @@ class Manager:
 
             if ok1:
                 print(f"[MANAGER] Capture OK: {cam1_path}, {cam3_path}")
+                logger.debug(f"Capture OK: {cam1_path}, {cam3_path}")
                 return (cam1_path, cam3_path)
 
             return None
@@ -653,11 +695,10 @@ class Manager:
             return None
 
     def _confirm_auger_position_with_movement_loop(self, target_area: int) -> bool:
-        MOVEMENT_DURATION = 2  # seconds
         confirmations = []
         
         try:
-            print(f"[MANAGER] Starting 5-loop auger position confirmation (Target Area: {target_area})")
+            logger.debug(f"[MANAGER] Starting 5-loop auger position confirmation (Target Area: {target_area})")
             
             # ─── Loop 1: Original Position ─────────────────────────────────────────
             print("\n[MANAGER] --- Loop 1/5: Original Position ---")
@@ -665,6 +706,7 @@ class Manager:
             if images:
                 result = confirm_auger_position(images[0], images[1], target_area)
                 confirmations.append(result)
+                logger.debug(f"[MANAGER] Loop 1 Result: {'PASS' if result else 'FAIL'}")
                 print(f"[MANAGER] Loop 1 Result: {'PASS' if result else 'FAIL'}")
                 if result: return True  # If original position is correct, no need to continue loops
             else:
@@ -762,7 +804,7 @@ class Manager:
     # ── State handlers ────────────────────────────────────────────────────────
 
     def _handle_idle(self):
-        msg = self._pop("manager/rfid")
+        msg = self._pop("rfid/status")
         
         if not msg:
             return
@@ -777,25 +819,26 @@ class Manager:
             "SAMPLE_3_IMG_PATH": normalize_path(os.path.join(RESULT_IMG_PATH, self.date_file, self.uid, "SAMPLE_3_IMG.jpg")),
             "REPORT_PATH": normalize_path(os.path.join(RESULT_IMG_PATH, self.date_file, self.uid, f"REPORT_{self.uid}.pdf")),
         }
+
         print(f"[MANAGER] RFID event uid={self.uid}  tags={self.rfids}")
         logger.debug(f"Started event uid={self.uid}  tags={self.rfids}")
-        
-        msg = self._pop("plc_sampler/status")
+
+        self._barrier(action="red_signal")
+        time.sleep(1)
         self._goto(State.DB_CHECK)
 
     def _handle_db_check(self):
-        msg = self._pop("camera/status")
-        self._barrier(action="red_signal")
-        time.sleep(2)
+        msg = self._pop("plc_barrier/status")
 
-        if msg and msg.get("action") == "cam2_done":
-            print("[MANAGER] CAM2 captured — checking for vehicle front ")
-            # Add the AI Model verification here if needed, before DB check
+        if msg and msg.get("action") == "red_sent":
+            print("[MANAGER] Red Signal set !")
+            logger.debug("Red Signal set !")
         
         vehicle = self._resolve_rfid(self.rfids)
         
         if vehicle:
             print(f"[MANAGER] Vehicle found in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
+            logger.debug(f"[MANAGER] Vehicle found in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
             self.vehicle = vehicle
             vendor_code = vehicle.get("VENDOR_CODE")
             rfid_key = build_rfid_key(self.rfids, self.uid)
@@ -812,18 +855,13 @@ class Manager:
             db_add_plc_comm(self.uid, self.state.name)
             self._goto(State.OPEN_BARRIER)
         else:
-            bucket_no = "0"
             print("[MANAGER] RFID not in DB — will poll ")
             logger.info("RFID not in DB — will poll ")
-            db_create_log(self.uid, self.rfids, bucket_no, self.paths)
+            db_create_log(self.uid, self.rfids, str(self.bucket_no), self.paths)
             self._db_last_polled = time.time()
             self._goto(State.WAITING_FOR_DB)
 
     def _handle_waiting_for_db(self):
-        msg = self._pop("plc_barrier/status")
-
-        if msg and msg.get("action") == "red_sent":
-            print("[MANAGER] Red Signal set !")
 
         if self._elapsed() > DB_WAIT_TIMEOUT:
             print("[MANAGER] DB wait timed out — resetting.")
@@ -836,6 +874,8 @@ class Manager:
 
         self._db_last_polled = time.time()
         print(f"[MANAGER] Polling DB for vehicle with RFID ... {build_rfid_key(self.rfids, self.uid)}")
+        logger.info(f"Polling DB for vehicle with RFID ... {build_rfid_key(self.rfids, self.uid)}")
+
         vehicle = self._resolve_rfid(self.rfids)
 
         if vehicle:
@@ -853,18 +893,25 @@ class Manager:
 
             print(f"[MANAGER] Vehicle now in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
             logger.debug(f"Vehicle now in DB: {vehicle['VEHICLE_NUMBER']} ({vehicle['VENDER_NAME']})")
+
             # refreshing vehicle to get correct bucket number
             vehicle = self._resolve_rfid(self.rfids)
             self.vehicle = vehicle
+            self._barrier(action="green_signal")
+            time.sleep(2)
             self._goto(State.OPEN_BARRIER)
 
     def _handle_open_barrier(self):
+        msg = self._pop("plc_barrier/status")
+
+        if msg and msg.get("action") == "green_sent":
+            print("[MANAGER] Green Signal set !")
+            logger.debug("Green Signal set !")
+
         print("[MANAGER] Sending open barrier command ")
         self._cam(action="cam2_single", path=self.paths["VEHICLE_IMG_PATH"])
         self._barrier(action="open_barrier")
-        time.sleep(3)
-        self._barrier(action="green_signal")
-        # self._cam(action="sample_capture_start", uid=self.uid)
+        time.sleep(2)
         
         self._goto(State.BARRIER_OPENING)
 
@@ -896,7 +943,7 @@ class Manager:
                 print(f"[MANAGER] Bucket {bucket_no} confirmed.")
                 logger.debug(f"[MANAGER] Bucket {bucket_no} confirmed.")
                 self._goto(State.VEHICLE_PLACEMENT)
-                return
+            
             time.sleep(0.1)
         
         print("[MANAGER] Bucket set timeout — continuing anyway")
@@ -914,6 +961,7 @@ class Manager:
         
         if msg.get("status") == "truck_present":
             print("[MANAGER] Truck placement confirmed.")
+
             # Check for AUTO/MANUAL signal
             self._sampler(action="auto_manual")
             time.sleep(3)
@@ -931,31 +979,28 @@ class Manager:
             
             # Set red signal
             db_update_plc_comm(self.uid, self.state.name)
-            time.sleep(5)
             self._barrier(action="red_signal")
-            self._goto(State.RED_SIGNAL)
+            time.sleep(2)
+            self._goto(State.CLOSE_BARRIER)
 
-    def _handle_red_signal(self):
+    def _handle_close_barrier(self):
         msg = self._pop("plc_barrier/status")
         
         if msg and msg.get("status") == "red_sent":
             print("[MANAGER] Red signal confirmed.")
-            self._goto(State.CLOSE_BARRIER)
-            return
-        
-        if self._elapsed() > 80:
-            print("[MANAGER] Red signal timeout — proceeding to close barrier")
-            self._goto(State.CLOSE_BARRIER)
+            logger.debug("Red signal confirmed.")
 
-    def _handle_close_barrier(self):
-        print("[MANAGER] Sending close barrier command ")
-        time.sleep(10)
+        time.sleep(15)
         self._barrier(action="close_barrier")
+        time.sleep(2)
+
+        # Sending data to printer with vendor and vehicle info for label printing
         vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
         vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
         self._printer(action="send_data", vendor_name=vendor_name.replace(" ", "").upper(), vehicle_number=vehicle_number.replace(" ", "").upper(), dtstamp=self.uid.replace('_', ''))
         print(f"[MANAGER] Data Sent — {vendor_name.replace(' ', '').upper()} - {vehicle_number.replace(' ', '').upper()} - {self.uid.replace('_', '')}")
         logger.info(f"Data Sent — {vendor_name.replace(' ', '').upper()} - {vehicle_number.replace(' ', '').upper()} - {self.uid.replace('_', '')}")
+        
         self._goto(State.BARRIER_CLOSING)
 
     def _handle_barrier_closing(self):
@@ -991,10 +1036,11 @@ class Manager:
             self._goto(State.CYCLE_POSITION)
         
         if self._elapsed() > HOME_POSITION_TIMEOUT:
-            print("[MANAGER] Home position timeout — proceeding with sampling")
+            print("[MANAGER] Home position timeout — Going back to vehicle placement")
+            logger.debug("Home position timeout — Going back to vehicle placement")
             self._current_sample_index = 0
             self._successful_cycles = 0
-            self._goto(State.CYCLE_POSITION)
+            self._goto(State.VEHICLE_PLACEMENT)
 
         self._sampler(action="move_home")
         time.sleep(10)
@@ -1013,13 +1059,13 @@ class Manager:
         else:
             target_area = get_sample_positions([], [])
             self.positions.append(target_area)
+
         print(f"[MANAGER] Sampling positions: {self.positions}")
-        
-        pos = self.positions[self._current_sample_index]
         print(f"[MANAGER] Moving to sampling position: {pos}")
-        
+        logger.debug(f"Moving to sampling position: {pos}")
+
+        pos = self.positions[self._current_sample_index]
         self._sampler(action="sample_cycle", x=pos["x"], y=pos["y"])
-        logger.info(f"{self.positions}")
         self._goto(State.CYCLE_CONFIRM)
 
     def _handle_cycle_confirm(self):
@@ -1034,7 +1080,7 @@ class Manager:
         
         if msg and msg.get("status") == "position_set":
             print("[MANAGER] Auger positioned — waiting for AI confirmation ")
-            time.sleep(2)
+
             # if self.ai_model:
             #     try: self._confirm_auger_position_with_movement_loop(self.positions[self._current_sample_index]["area"])
             #     except: pass
@@ -1043,6 +1089,7 @@ class Manager:
             self.cycle = cycle_num
             self._sampler(action="start_cycle", cycle=cycle_num)
             print("[MANAGER] CYCLE START GIVEN !!!")
+            logger.debug("Position set, cycle start given")
             time.sleep(10)
             self._goto(State.CYCLE_CAPTURE)
             return
@@ -1065,7 +1112,7 @@ class Manager:
         if msg and msg.get("status") == "cycle_start_given":
             print("[MANAGER] Cycle start given and recieved !!")
             self._sampler(action="check_sample_cycle_complete")
-            time.sleep(5)
+            time.sleep(8)
             self._cam(action="cam3_single", path=self.paths[f"SAMPLE_{self.cycle}_IMG_PATH"])
 
         self._goto(State.CYCLE_DONE)
@@ -1084,25 +1131,26 @@ class Manager:
         if msg and msg.get("status", "") == "sample_cycle_complete":
             
             print(f"[MANAGER] Cycle {self.cycle} completed")
+            logger.debug(f"Cycle {self.cycle} completed")
             self._successful_cycles += 1
             self._current_sample_index += 1
             
             if self._successful_cycles >= TOTAL_CYCLES:
                 self._barrier(action="green_signal")
+                time.sleep(2)
                 print(f"[MANAGER] All {TOTAL_CYCLES} successful cycles completed.")
-                time.sleep(10)  # Ensure PLC has time to update status
+                logger.debug(f"All {TOTAL_CYCLES} successful cycles completed.")
                 self._sampler(action="check_all_samples_status")
+                time.sleep(2)  # Ensure PLC has time to update status
                 self._goto(State.SAMPLE_COLLECTION)
             else:
                 print(f"[MANAGER] Moving to next sampling position ")
                 self._goto(State.CYCLE_POSITION)
-
         elif msg and msg.get("status", "") == "cycle_error":
             print(f"[MANAGER] Cycle error: {msg.get('msg')}")
             print("[MANAGER] Retrying with different position ")
             self.positions.pop()
             self._goto(State.CYCLE_POSITION)
-        
         if self._elapsed() > SAMPLE_CYCLE_TIMEOUT:
             print("[MANAGER] Cycle timeout — moving to next position")
             self.positions.pop()
@@ -1113,6 +1161,12 @@ class Manager:
             time.sleep(3)
             
     def _handle_all_samples_collection(self):
+        msg = self._pop("plc_barrier/status")
+        
+        if msg and msg.get("status") == "red_sent":
+            print("[MANAGER] Red signal confirmed.")
+            logger.debug("Red signal confirmed.")
+
         msg = self._pop("plc_sampler/status")
 
         if msg and msg.get("status") == "emergency_stop":
@@ -1121,16 +1175,14 @@ class Manager:
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
-        
         elif msg and msg.get("status") == "all_samples_collected":
-            self._barrier(action="green_signal")
             now = time.time()
             while (time.time() - now) < CLOSE_CYCLE_WAIT_TIME:
                 time.sleep(10)
                 print("[MANAGER] Waiting for Cycle Stop.")
-            self._sampler(action="sample_cycle_stop")
-            self._goto(State.GREEN_SIGNAL)
 
+            self._sampler(action="sample_cycle_stop")
+            self._goto(State.COMPLETE_FINAL)
         else:
             self._sampler(action="check_all_samples_status")
             time.sleep(2)
@@ -1144,10 +1196,10 @@ class Manager:
             return
         
         status = msg.get("status", "")
-        # Emergency stop cleared - resume to CYCLE_CONFIRM and reset cycles
         if status == "emergency_cleared":
             db_update_plc_comm(self.uid, "VEHICLE_PLACEMENT")
             self._barrier(action="check_truck")
+            time.sleep(2)
             self._flush_topic("plc_sampler/status")
             print("[MANAGER] Emergency stop cleared. Resuming operation ")
             
@@ -1163,27 +1215,11 @@ class Manager:
 
         if msg and msg.get("status") == "sample_cycle_stop_comp": 
             print(f"[MANAGER] Sampling complete — generating QR code ")
-            
-            # Set green signal
-            self._barrier(action="green_signal")
             self._goto(State.COMPLETE)
-
         else:
             print(f"[MANAGER] Waiting for sample cycle stop confirmation ")
             return
-
-    def _handle_green_signal(self):
-        msg = self._pop("plc_barrier/status")
         
-        if msg and msg.get("status") == "green_sent":
-            print("[MANAGER] Green signal confirmed.")
-            self._goto(State.COMPLETE_FINAL)
-            return
-        
-        if self._elapsed() > 10:
-            print("[MANAGER] Green signal timeout — marking as complete")
-            self._goto(State.COMPLETE_FINAL)
-
     def _handle_complete(self):
         print(f"[MANAGER] Session {self.uid} complete.")
         try:
@@ -1206,13 +1242,11 @@ class Manager:
 
         db_complete_log(self.uid)
         time.sleep(5)
+
         self._printer(action="stop")
-        # self._cam(action="sample_capture_stop")
         self._sampler(action="reset")
         self._barrier(action="reset")
-        
-        # Signal RFID reader to resume reading
-        self.mqtt.publish("rfid/control", {"action": "cycle_completed"})
+        self._rfid(action="cycle_completed")
         
         self._reset("")
         self._cam(action="reset")
@@ -1246,7 +1280,7 @@ class Manager:
 
     def run(self):
         print("[MANAGER] Coal Sampling Manager started.")
-        print("[MANAGER] Waiting for vehicles \n")
+
         while True:
             try:
                 handler_name = self.HANDLERS.get(self.state)
@@ -1255,13 +1289,20 @@ class Manager:
             except Exception as e:
                 import traceback
                 print(f"[MANAGER] Unhandled exception in {self.state.name}: {e}")
-                traceback.print_exc()
+                logger.error(f"{traceback.format_exc()}")
                 self._goto(State.ERROR)
+
             time.sleep(0.05)
 
 def main():
-    mgr = Manager()
-    mgr.run()
+    while True:
+        try:
+            mgr = Manager()
+            mgr.run()
+        except Exception as e:
+            print(f"[MAIN] Unhandled exception in main loop: {e}")
+            logger.error(f"{traceback.format_exc()}")
+            time.sleep(5)  # Wait before restarting the manager
 
 if __name__ == "__main__":
     main()

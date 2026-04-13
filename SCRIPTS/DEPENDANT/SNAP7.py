@@ -128,12 +128,9 @@ class PLCCOMMINCATION:
                 util.set_int(data, 0, int_value)   # FIX
                 clientConn.db_write(self.DB_WRITE_NUMBER, db_col_start_buffer_pos, data)
                 return True
-            else:
-                print("PLC not connected")
-                return False
         except Exception as e:
             print("writeIntToPLC() Exception is : "+ str(e))
-            return False
+            raise
 
     def writeDoubleToPLC(self, clientConn, db_col_start_buffer_pos, double_value):
         try:

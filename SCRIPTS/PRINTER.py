@@ -73,6 +73,8 @@ class Printer:
         return '[{"GroupName":"G1","SelectMessage":"VAHICALDATA","ResetMessage":true,"Action":"Stop"}]'
 
     def _data_json(self, vendor, vehicle, dt):
+        logger.info(f"Preparing JSON with vendor={vendor}, vehicle={vehicle}, dt={dt}")
+
         return ( '{"MessageName":"VAHICALDATA","KeyValue":[{'
             f'"Eth_0":"{vehicle}|{vendor}|{dt}",'
             f'"Eth_1":"{vehicle}",'
@@ -102,9 +104,8 @@ class Printer:
             self.connect()
 
         print(f"[PRINTER] {tag}:", packet.hex().upper())
+        logger.info(f"[PRINTER] {tag}:", packet.hex().upper())
         self.sock.sendall(packet)
-
-    # ───────────────────────────────────────── ACTIONS ───────────────────────── #
 
     def start(self):
         self.connect()
