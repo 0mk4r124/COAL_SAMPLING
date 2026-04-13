@@ -228,7 +228,7 @@ def fetch_history_data(request):
     # ---- Subquery: Match RFID inside pipe-separated string ----
     vehicle_master_qs = VEHICLE_MASTER.objects.filter(
         rfid=OuterRef('rfids')
-    ).filter(match__gt=0)
+    )
 
     # ---- Subquery: Vendor from vehicle ----
     # vehicle_master_qs = VEHICLE_MASTER.objects.filter(
@@ -305,7 +305,7 @@ def download_history_data(request):
         # ---- SAME QUERY AS fetch_history_data ----
         vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
             rfid=OuterRef('rfids')
-        ).filter(match__gt=0)
+        )
 
         vendor_master_qs = VENDOR_MASTER.objects.filter(
             vendor_code=OuterRef('vendor_code')
@@ -537,7 +537,7 @@ def get_current_status(request):
         vendor_obj = None
 
         # 2. Extract RFIDs
-        rfid_key = current_vehicle.rfids
+        rfid_key =  rfid_key = build_rfid_key(current_vehicle.rfids, current_vehicle.uid)
         vehicle_obj = VEHICLE_MASTER.objects.filter(rfid=rfid_key).first()
 
         # 3. Find first matching RFID

@@ -193,6 +193,7 @@ class SamplerController:
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 0)
             time.sleep(0.5)
+            return True
 
         except Exception as e:
 
@@ -224,6 +225,7 @@ class SamplerController:
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
             time.sleep(0.5)
+            return True
 
         except Exception as e:
 
@@ -255,6 +257,7 @@ class SamplerController:
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 0)
             time.sleep(0.5)
+            return True
 
         except Exception as e:
 
@@ -286,6 +289,7 @@ class SamplerController:
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
             time.sleep(0.5)
+            return True
 
         except Exception as e:
 
@@ -455,8 +459,8 @@ class SamplerController:
                         if self.move_home():
                             x = data.get("x", 0)
                             y = data.get("y", 0)
-                            self.move_y_left((y*self.total_y)/100)
-                            self.move_x_reverse((x*self.total_x)/100)
+                            if not self.move_y_left((y*self.total_y)/100): continue
+                            if not self.move_x_reverse((x*self.total_x)/100): continue
                             time.sleep(2)
                             self.mqtt.publish(TOPIC_OUT, {"status": "position_set"})
                     elif action == "check_sample_cycle_complete":

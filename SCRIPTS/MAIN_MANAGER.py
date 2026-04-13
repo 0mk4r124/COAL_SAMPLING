@@ -52,7 +52,7 @@ def build_rfid_key(rfids, uid=None):
         return uid or ""
 
     if len(rfids) == 1:
-        return f"{rfids[0]}|{uid}" if uid else rfids[0]
+        return f"{uid}|{rfids[0]}" if uid else rfids[0]
 
     return "|".join(rfids)
 
@@ -156,7 +156,7 @@ def get_sample_positions(used_areas=None, prev_points=None):
     x_step = (x_max - x_min) / x_splits
     y_step = (y_max - y_min) / y_splits
 
-    # Map area → grid index
+    # Map area --> grid index
     row = (area - 1) // x_splits
     col = (area - 1) % x_splits
 
@@ -254,7 +254,7 @@ def db_resolve_bucket(rfid: str, vendor_code: str) -> int:
                 bucket = int(bucket)
                 used_buckets.add(bucket)
 
-                # Same vendor → reuse
+                # Same vendor --> reuse
                 if vc == vendor_code and vendor_bucket is None:
                     vendor_bucket = bucket
 
@@ -266,7 +266,7 @@ def db_resolve_bucket(rfid: str, vendor_code: str) -> int:
             if i not in used_buckets:
                 return i
 
-        # All used → cyclic
+        # All used --> cyclic
         return (max(used_buckets) % 10) + 1
 
     except Exception as e:
@@ -284,6 +284,7 @@ def db_find_vehicle(rfids: str, uid: str) -> dict | None:
         cur = db.cursor(pymysql.cursors.DictCursor)
 
         rfid_key = build_rfid_key(rfids, uid)
+        print(f"[DB] Looking up vehicle with RFID key: {rfid_key}")
 
         cur.execute(
             """
@@ -291,7 +292,7 @@ def db_find_vehicle(rfids: str, uid: str) -> dict | None:
                 vm.RFID,
                 vm.VEHICLE_NUMBER,
                 vm.VENDOR_CODE,
-                vr.VENDOR_NAME
+                vr.VENDER_NAME
             FROM VEHICLE_MASTER vm
             LEFT JOIN VENDOR_MASTER vr 
                 ON vr.VENDOR_CODE = vm.VENDOR_CODE
@@ -300,8 +301,10 @@ def db_find_vehicle(rfids: str, uid: str) -> dict | None:
             """,
             (rfid_key,)
         )
+        row = cur.fetchone()
+        db.commit()
 
-        return cur.fetchone()
+        return row
 
     except Exception as e:
         print(f"[DB] db_find_vehicle error: {e}")
@@ -325,6 +328,7 @@ def db_vehicle_already_in_front(rfids: list, uid: str) -> bool:
         """
         cur.execute(query, (rfid_key,))
         row = cur.fetchone()
+        db.commit()
 
         return (row[0] > 1) if row else False
     except Exception as e:
@@ -547,6 +551,7 @@ class Manager:
         self.cycle     : int         = 0
         self.date_file : str         = ""
         self.ai_model  : bool        = False
+        self.bucket_no : int         = 1  # Store bucket number for the session
         self._emergency_return_state: State | None = State.CYCLE_CONFIRM  # Track which state to resume to after emergency
 
         self._state_entered_at: float = 0.0
@@ -794,7 +799,7 @@ class Manager:
             self.vehicle = vehicle
             vendor_code = vehicle.get("VENDOR_CODE")
             rfid_key = build_rfid_key(self.rfids, self.uid)
-            bucket_no = str(db_resolve_bucket(rfid_key, vendor_code))
+            self.bucket_no = db_resolve_bucket(rfid_key, vendor_code)
             
             if db_vehicle_already_in_front("|".join(self.rfids)):
                 print("[MANAGER] Vehicle already in front — aborting.")
@@ -803,7 +808,7 @@ class Manager:
                 return
             
             # Create log entry
-            db_create_log(self.uid, self.rfids, bucket_no, self.paths)
+            db_create_log(self.uid, self.rfids, str(self.bucket_no), self.paths)
             db_add_plc_comm(self.uid, self.state.name)
             self._goto(State.OPEN_BARRIER)
         else:
@@ -830,16 +835,19 @@ class Manager:
             return
 
         self._db_last_polled = time.time()
-        print("[MANAGER] Polling DB for vehicle ")
+        print(f"[MANAGER] Polling DB for vehicle with RFID ... {build_rfid_key(self.rfids, self.uid)}")
         vehicle = self._resolve_rfid(self.rfids)
 
         if vehicle:
             self.vehicle = vehicle
             vendor_code = vehicle.get("VENDOR_CODE")
             
-            rfid_key = build_rfid_key(self.rfids, self.uid)
-            bucket_no = str(db_resolve_bucket(rfid_key, vendor_code))
-            db_bucket_update_log(self.uid, bucket_no)
+            # Use cached bucket_no if already set, otherwise resolve
+            if self.bucket_no == 1:  # Default value, not yet resolved
+                rfid_key = build_rfid_key(self.rfids, self.uid)
+                self.bucket_no = db_resolve_bucket(rfid_key, vendor_code)
+            
+            db_bucket_update_log(self.uid, self.bucket_no)
             db_add_plc_comm(self.uid, self.state.name)
             time.sleep(1)
 
@@ -874,8 +882,7 @@ class Manager:
             self._goto(State.ERROR)
 
     def _handle_set_bucket(self):
-        try: bucket_no = int(self.vehicle.get("BUCKET_NO", 1))
-        except: bucket_no = 7
+        bucket_no = self.bucket_no
         print(f"[MANAGER] Setting bucket to {bucket_no} ")
         logger.debug(f"Setting bucket to {bucket_no} ")
         self._barrier(action="set_bucket", bucket_no=bucket_no)
@@ -909,17 +916,18 @@ class Manager:
             print("[MANAGER] Truck placement confirmed.")
             # Check for AUTO/MANUAL signal
             self._sampler(action="auto_manual")
-            time.sleep(3)  # Give PLC time to update status
+            time.sleep(3)
             msg = self._pop("plc_sampler/status")
-            auto_manual_status = msg.get("status", True)
-            if auto_manual_status == "auto_manual_off":
-                print("[MANAGER] Manual mode — waiting for user confirmation ")
-                logger.debug(f"Manual mode {self.uid} — waiting for user confirmation ")
-                # Update database to trigger popup
-                db_update_plc_comm(self.uid, self.state.name, auto_manual="ACTIVE")
-                time.sleep(5)
-                # Web app will handle this - popup will appear
-                return
+            if msg:
+                auto_manual_status = msg.get("status", True)
+                if auto_manual_status == "auto_manual_off":
+                    print("[MANAGER] Manual mode — waiting for user confirmation ")
+                    logger.debug(f"Manual mode {self.uid} — waiting for user confirmation ")
+                    # Update database to trigger popup
+                    db_update_plc_comm(self.uid, self.state.name, auto_manual="ACTIVE")
+                    time.sleep(5)
+                    # Web app will handle this - popup will appear
+                    return
             
             # Set red signal
             db_update_plc_comm(self.uid, self.state.name)
@@ -941,6 +949,7 @@ class Manager:
 
     def _handle_close_barrier(self):
         print("[MANAGER] Sending close barrier command ")
+        time.sleep(10)
         self._barrier(action="close_barrier")
         vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
         vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
@@ -992,6 +1001,7 @@ class Manager:
 
     def _handle_cycle_position(self):
         if self._successful_cycles >= TOTAL_CYCLES:
+            self._barrier(action="green_signal")
             print(f"[MANAGER] All {TOTAL_CYCLES} cycles completed.")
             logger.debug(f"All {TOTAL_CYCLES} cycles completed.")
             self._goto(State.SAMPLE_COLLECTION)
@@ -1072,11 +1082,13 @@ class Manager:
             return
         
         if msg and msg.get("status", "") == "sample_cycle_complete":
+            
             print(f"[MANAGER] Cycle {self.cycle} completed")
             self._successful_cycles += 1
             self._current_sample_index += 1
             
             if self._successful_cycles >= TOTAL_CYCLES:
+                self._barrier(action="green_signal")
                 print(f"[MANAGER] All {TOTAL_CYCLES} successful cycles completed.")
                 time.sleep(10)  # Ensure PLC has time to update status
                 self._sampler(action="check_all_samples_status")
@@ -1111,6 +1123,7 @@ class Manager:
             return
         
         elif msg and msg.get("status") == "all_samples_collected":
+            self._barrier(action="green_signal")
             now = time.time()
             while (time.time() - now) < CLOSE_CYCLE_WAIT_TIME:
                 time.sleep(10)
@@ -1197,6 +1210,10 @@ class Manager:
         # self._cam(action="sample_capture_stop")
         self._sampler(action="reset")
         self._barrier(action="reset")
+        
+        # Signal RFID reader to resume reading
+        self.mqtt.publish("rfid/control", {"action": "cycle_completed"})
+        
         self._reset("")
         self._cam(action="reset")
 
@@ -1212,11 +1229,16 @@ class Manager:
     def _reset(self, msg: str = ""):
         if msg != "":
             db_error_log(self.uid, f"Session reset due to error : {msg}")
+        
+        # Signal RFID reader to resume reading
+        self.mqtt.publish("rfid/control", {"action": "cycle_reset"})
+        
         self.uid       = None
         self.rfids     = []
         self.vehicle   = None
         self.positions = []
         self.cycle     = 0
+        self.bucket_no = 1
         self._current_sample_index = 0
         self._successful_cycles = 0
         self._goto(State.IDLE)

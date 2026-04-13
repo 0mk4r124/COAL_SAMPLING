@@ -19,18 +19,21 @@ TCP_PORT = 100
 BUFFER_SIZE = 1024
 DEBOUNCE_WINDOW_SEC = 5.0
 TOPIC_OUT = "manager/rfid"
+TOPIC_IN = "rfid/control"
 
 ig_rfids = ["C80700000000000001F8"]
 # ig_rfids = []
 
 def main():
     mq = MQTT("RFID_READER")
+    mq.subscribe(TOPIC_IN)  # Listen for cycle completion/reset signals
 
     session_active = False
     session_uid = None
     session_start = None
     last_seen = time.time()
     rfids = set()
+    reading_enabled = True  # State machine: True = reading, False = buffer clear mode
 
     logger.info(f"Connecting to RFID reader at {TCP_IP}:{TCP_PORT}")
 
@@ -41,9 +44,20 @@ def main():
 
         while True:
 
+            # ── Check for control messages from MAIN_MANAGER ──
+            control_msg = mq.pop(TOPIC_IN)
+            if control_msg:
+                action = control_msg.get("action")
+                if action in ("cycle_completed", "cycle_reset"):
+                    reading_enabled = True
+                    rfids.clear()
+                    session_active = False
+                    print(f"[RFID] Received: {action} — resuming RFID reading")
+                    logger.info(f"Received: {action} — resuming RFID reading")
+
             try:
                 data = s.recv(BUFFER_SIZE)
-                if data:
+                if data and reading_enabled:
                     raw  = data.hex().upper()
                     rfid = data.decode(errors="ignore").strip()
                     rfid = str(rfid)[1:]
@@ -63,6 +77,9 @@ def main():
                         if rfid not in rfids:
                             last_seen = time.time() 
                             rfids.add(rfid)
+                elif data and not reading_enabled:
+                    # Buffer clear mode — silently discard incoming tags
+                    pass
 
             except socket.timeout: pass
             except Exception as e:
@@ -70,7 +87,7 @@ def main():
                 print(f"ERROR: Recv error: {e}")
                 time.sleep(1)
 
-            if session_active and last_seen is not None:
+            if session_active and last_seen is not None and reading_enabled:
                 idle = time.time() - last_seen
                 if idle >= DEBOUNCE_WINDOW_SEC:
                     payload = {
@@ -81,15 +98,13 @@ def main():
                     mq.publish(TOPIC_OUT, payload)
                     logger.info(f"Published {TOPIC_OUT}: {payload}")
 
-                    # reset
+                    # ── Enter buffer clear mode ──
+                    reading_enabled = False
                     session_active = False
-                    session_uid = None
                     last_seen = None
                     rfids = set()
-                    end_time = time.time()
-                    while (time.time() - end_time) < 300:
-                        try: data = s.recv(BUFFER_SIZE)
-                        except: pass
+                    print("[RFID] Session published — entering buffer clear mode (waiting for cycle signal)")
+                    logger.info("Session published — entering buffer clear mode")
 
 
 if __name__ == "__main__":

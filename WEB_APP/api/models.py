@@ -28,7 +28,7 @@ class VEHICLE_LOGS(models.Model):
 
 class VEHICLE_MASTER(models.Model):
     id = models.AutoField(db_column='ID', primary_key=True)
-    rfid = models.CharField(db_column='RFID', max_length=100, blank=True, null=True)
+    rfid = models.CharField(db_column='RFID', max_length=500, blank=True, null=True)
     vehicle_number = models.CharField(db_column='VEHICLE_NUMBER', max_length=50, blank=True, null=True)
     vendor_code = models.CharField(db_column='VENDOR_CODE', max_length=50, blank=True, null=True)
     
