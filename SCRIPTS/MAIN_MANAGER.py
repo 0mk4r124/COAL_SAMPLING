@@ -944,6 +944,7 @@ class Manager:
                 print(f"[MANAGER] Bucket {bucket_no} confirmed.")
                 logger.debug(f"[MANAGER] Bucket {bucket_no} confirmed.")
                 self._goto(State.VEHICLE_PLACEMENT)
+                return
             
             time.sleep(0.1)
         
@@ -984,6 +985,9 @@ class Manager:
             self._barrier(action="red_signal")
             time.sleep(2)
             self._goto(State.CLOSE_BARRIER)
+
+        self._barrier(action="check_truck")
+        time.sleep(3)
 
     def _handle_close_barrier(self):
         msg = self._pop("plc_barrier/status")
@@ -1190,7 +1194,7 @@ class Manager:
 
     def _handle_cycle_emergency_wait(self):
         print("[MANAGER] Waiting for emergency stop clearance on Sampler PLC ")
-        time.sleep(3)  # Poll every 5 seconds
+        time.sleep(3)  # Poll every 3 seconds
         
         msg = self._pop("plc_sampler/status")
         if not msg:
@@ -1210,6 +1214,7 @@ class Manager:
             self.positions = []
             self._emergency_return_state = None
             self._goto(State.VEHICLE_PLACEMENT)
+            return
 
     def _handle_complete_final(self):
         msg = self._pop("plc_sampler/status")

@@ -427,7 +427,7 @@ class SamplerController:
                     break
                 
                 else:
-                    if time.time() - counter > 2:  # Log every 2 seconds if still in emergency
+                    if time.time() - counter > 3:  # Log every 2 seconds if still in emergency
                         print("[PLC_SAMPLER] Emergency stop activated!")
                         self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop"})
                         counter = time.time()
