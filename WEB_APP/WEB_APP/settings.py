@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     # added applications
     'accounts',
     'api',
+    'pwa',
 ]
 
 MIDDLEWARE = [
@@ -138,3 +139,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 LOGIN_URL = '/login/'
 LOGIN_REDIRECT_URL = '/'
 LOGOUT_REDIRECT_URL = '/login/'
+
+PWA_APP_NAME = "Web App"
+PWA_APP_DESCRIPTION = "Coal Sampling Web Application"
+PWA_APP_THEME_COLOR = "#fdf50d"
+PWA_APP_BACKGROUND_COLOR = "#ffffff"
+PWA_APP_DISPLAY = "standalone"
+PWA_APP_SCOPE = "/"
+PWA_APP_START_URL = "/"
