@@ -13,6 +13,9 @@
     <link rel="stylesheet" href="{% static 'css/style.css' %}">
     <link rel="icon" type="image/png" href="{% static 'logo/utcl.png' %}">
 
+    <link rel="manifest" href="{% static 'manifest.json' %}">
+    <meta name="theme-color" content="#0d6efd">
+
 </head>
 
 <body class="bg-light">
@@ -66,6 +69,13 @@
     
     <!-- Finally, your custom scripts LAST -->
     <script src="{% static 'js/script.js' %}"></script>
+    <script>
+        if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("{% static 'js/service-worker.js' %}")
+            .then(reg => console.log("Service Worker registered", reg))
+            .catch(err => console.log("Service Worker failed", err));
+        }
+    </script>
 
 </body>
 </html>
