@@ -635,7 +635,7 @@ class Manager:
     def _wait_for_file(self, check_path_1: str, check_path_3: str, timeout: float = 10.0) -> bool:
         start = time.time()
         cam1_done = False
-        cam3_done = False
+        cam3_done = True
 
         while time.time() - start < timeout:
             msg = self._pop("camera/status")
@@ -660,8 +660,8 @@ class Manager:
 
             time.sleep(0.05)  # small yield, not 0.5
 
-        print(f"[MANAGER] Timeout → cam1={cam1_done}, cam3={cam3_done}")
-        logger.debug(f"Timeout → cam1={cam1_done}, cam3={cam3_done}")
+        print(f"[MANAGER] Timeout -> cam1={cam1_done}, cam3={cam3_done}")
+        logger.debug(f"Timeout -> cam1={cam1_done}, cam3={cam3_done}")
         return False
     
     def _capture_images_for_confirmation(self, loop_num: int, movement_type: str = "") -> tuple[str, str] | None:
@@ -940,6 +940,7 @@ class Manager:
         while (time.time() - now) < SET_BUCKET_WAIT_TIMEOUT:
             msg = self._pop("plc_barrier/status")
             if msg and msg.get("status") == "bucket_set":
+                self._barrier(action="check_truck")
                 print(f"[MANAGER] Bucket {bucket_no} confirmed.")
                 logger.debug(f"[MANAGER] Bucket {bucket_no} confirmed.")
                 self._goto(State.VEHICLE_PLACEMENT)
@@ -947,6 +948,7 @@ class Manager:
             time.sleep(0.1)
         
         print("[MANAGER] Bucket set timeout — continuing anyway")
+        self._barrier(action="check_truck")
         self._goto(State.VEHICLE_PLACEMENT)
 
     def _handle_vehicle_placement(self):
@@ -990,7 +992,7 @@ class Manager:
             print("[MANAGER] Red signal confirmed.")
             logger.debug("Red signal confirmed.")
 
-        time.sleep(15)
+        time.sleep(10)
         self._barrier(action="close_barrier")
         time.sleep(2)
 
@@ -1060,12 +1062,11 @@ class Manager:
             target_area = get_sample_positions([], [])
             self.positions.append(target_area)
 
+        pos = self.positions[self._current_sample_index]
+        self._sampler(action="sample_cycle", x=pos["x"], y=pos["y"])
         print(f"[MANAGER] Sampling positions: {self.positions}")
         print(f"[MANAGER] Moving to sampling position: {pos}")
         logger.debug(f"Moving to sampling position: {pos}")
-
-        pos = self.positions[self._current_sample_index]
-        self._sampler(action="sample_cycle", x=pos["x"], y=pos["y"])
         self._goto(State.CYCLE_CONFIRM)
 
     def _handle_cycle_confirm(self):
@@ -1189,7 +1190,7 @@ class Manager:
 
     def _handle_cycle_emergency_wait(self):
         print("[MANAGER] Waiting for emergency stop clearance on Sampler PLC ")
-        time.sleep(5)  # Poll every 5 seconds
+        time.sleep(3)  # Poll every 5 seconds
         
         msg = self._pop("plc_sampler/status")
         if not msg:
