@@ -1,10 +1,11 @@
+import csv
 import os
 import time
 import base64
 import pymysql
 import requests
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ================= CONFIG =================
 DB_CONFIG = {
@@ -14,9 +15,9 @@ DB_CONFIG = {
     "database": "your_db"
 }
 
-DATA_API_URL = "http://192.168.1.58:8080/UltratechStagingV1_21_5_3_(1)/DharCoalAjaxReqController?apiName=syncDharCoalDataTable"
-UPTIME_API_URL = "http://192.168.1.58:8080/UltratechStagingV1_21_5_3_(1)/DharCoalAjaxReqController?apiName=syncUptimeHealthStatus"
-BASE_FILE_PATH = "C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/"
+DATA_API_URL = "https://www.insightzz-analytics.com/Ultratech//DharCoalAjaxReqController?apiName=syncDharCoalDataTable"
+UPTIME_API_URL = "https://www.insightzz-analytics.com/Ultratech//DharCoalAjaxReqController?apiName=syncUptimeHealthStatus"
+BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 
 SYNC_INTERVAL = 600  # 10 minutes
 BATCH_SIZE = 5
@@ -125,16 +126,49 @@ def build_payload(row):
     }
 
 def build_payload_uptime():
-    return {
+    # previous day
+    target_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    file_path = os.path.join(BASE_FILE_PATH, "HEALTH_LOGS", f"{target_date}.csv")
+
+    if not os.path.exists(file_path):
+        print(f"[UPTIME] No CSV found for {target_date}")
+        return None
+
+    stats = {}
+
+    # aggregate per device_type
+    with open(file_path, "r") as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            dtype = (row.get("device_type") or "").upper()
+            status = row.get("status")
+
+            if dtype not in stats:
+                stats[dtype] = {"total": 0, "online": 0}
+
+            stats[dtype]["total"] += 1
+            if status == "ONLINE":
+                stats[dtype]["online"] += 1
+
+    # convert to minutes (out of 1440)
+    def to_minutes(s):
+        if s["total"] == 0:
+            return 0
+        return round((s["online"] / s["total"]) * 1440)
+
+    payload = {
         "conveyorList": [{
-            "ID": 1245,
-            "CAMERA1_UPTIME": 1440,
-            "PLC_UPTIME": 1440,
-            "SERVER_UPTIME": 1440,
-            "INTERNET_UPTIME": 1440,
-            "CURRENT_DATETTIME": str(datetime.now()),
+            "ID": int(time.time()),  # epoch
+            "CAMERA1_UPTIME": to_minutes(stats.get("CAMERA", {"total": 0, "online": 0})),
+            "PLC_UPTIME": to_minutes(stats.get("PLC", {"total": 0, "online": 0})),
+            "SERVER_UPTIME": to_minutes(stats.get("SERVER", {"total": 0, "online": 0})),
+            "INTERNET_UPTIME": to_minutes(stats.get("INTERNET", {"total": 0, "online": 0})),
+            "CURRENT_DATETTIME": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }]
     }
+
+    return payload
 
 # -------- API CALL --------
 def send_to_server(payload):
@@ -185,26 +219,30 @@ def run_sync():
 
 # -------- MAIN LOOP --------
 def run_uptime_sync():
-    print("[SYNC] Started background sync service...")
+    print("[SYNC] Uptime scheduler started...")
+
+    last_run_date = None
 
     while True:
-        try:
+        now = datetime.now()
 
-            print(f"[SYNC] Processing uptime sync")
+        if now.hour == 0 and now.minute == 10:
+            if last_run_date != now.date():
+                print("[SYNC] Running uptime sync...")
 
-            payload = build_payload_uptime()
+                payload = build_payload_uptime()
 
-            success = send_to_server(payload)
+                if payload:
+                    success = send_to_server(payload)
 
-            if success:
-                print(f"[SYNC] Success !!")
-            else:
-                print(f"[SYNC] Failed !!")
+                    if success:
+                        print("[SYNC] Uptime sent successfully")
+                    else:
+                        print("[SYNC] Uptime send failed")
 
-        except Exception as e:
-            print(f"[SYNC] Loop error: {e}")
+                last_run_date = now.date()
 
-        time.sleep(SYNC_INTERVAL)
+        time.sleep(30)
 
 if __name__ == "__main__":
     run_uptime_sync()
