@@ -104,7 +104,7 @@ class Printer:
             self.connect()
 
         print(f"[PRINTER] {tag}:", packet.hex().upper())
-        logger.info(f"[PRINTER] {tag}:", packet.hex().upper())
+        logger.info(f"[PRINTER] {tag}: {packet.hex().upper()}")
         self.sock.sendall(packet)
 
     def start(self):

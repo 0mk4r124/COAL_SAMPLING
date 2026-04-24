@@ -844,7 +844,7 @@ class Manager:
             rfid_key = build_rfid_key(self.rfids, self.uid)
             self.bucket_no = db_resolve_bucket(rfid_key, vendor_code)
             
-            if db_vehicle_already_in_front("|".join(self.rfids)):
+            if db_vehicle_already_in_front("|".join(self.rfids), self.uid):
                 print("[MANAGER] Vehicle already in front — aborting.")
                 logger.debug(f"Vehicle already in front {self.uid} — aborting.")
                 self._reset()
@@ -1076,6 +1076,7 @@ class Manager:
     def _handle_cycle_confirm(self):
         msg = self._pop("plc_sampler/status")
         print(f"[MANAGER] Cycle Waiting for position confirmation")
+        time.sleep(2)
 
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
@@ -1211,6 +1212,7 @@ class Manager:
             self._barrier(action="check_truck")
             time.sleep(2)
             self._flush_topic("plc_sampler/status")
+            time.sleep(2)
             print("[MANAGER] Emergency stop cleared. Resuming operation ")
             
             # Reset successful cycles and return to CYCLE_CONFIRM
