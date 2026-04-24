@@ -29,7 +29,7 @@ DB_WAIT_TIMEOUT = 600 # Wait up to x seconds for DB entry to appear after RFID r
 TOTAL_CYCLES    = 3
 HOME_POSITION_TIMEOUT = 200 # Wait up to x seconds for auger to return to home position before aborting
 SAMPLE_CYCLE_TIMEOUT = 600
-POSITION_CONFIRMATION_TIMEOUT = 30
+POSITION_CONFIRMATION_TIMEOUT = 300
 CLOSE_CYCLE_WAIT_TIME = 50 # Wait time after close cycle command before checking for completion - allows PLC to process command and start movement
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 MOVEMENT_DURATION = 2 # Duration to move in each direction during auger position confirmation loops (in seconds)
@@ -844,7 +844,7 @@ class Manager:
             rfid_key = build_rfid_key(self.rfids, self.uid)
             self.bucket_no = db_resolve_bucket(rfid_key, vendor_code)
             
-            if db_vehicle_already_in_front("|".join(self.rfids)):
+            if db_vehicle_already_in_front("|".join(self.rfids), self.uid):
                 print("[MANAGER] Vehicle already in front — aborting.")
                 logger.debug(f"Vehicle already in front {self.uid} — aborting.")
                 self._reset()
@@ -1075,6 +1075,8 @@ class Manager:
 
     def _handle_cycle_confirm(self):
         msg = self._pop("plc_sampler/status")
+        print(f"[MANAGER] Cycle Waiting for position confirmation")
+        time.sleep(2)
 
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
@@ -1101,7 +1103,11 @@ class Manager:
         
         if self._elapsed() > POSITION_CONFIRMATION_TIMEOUT:
             print("[MANAGER] Position confirmation timeout — starting cycle")
-            self._goto(State.CYCLE_CAPTURE)
+            logger.debug("Position confirmation timeout — starting cycle")
+            print("[MANAGER] Retrying with different position ")
+            self.positions.pop()
+            time.sleep(2)
+            self._goto(State.CYCLE_POSITION)
 
     def _handle_cycle_capture(self):
         msg = self._pop("plc_sampler/status")
@@ -1206,6 +1212,7 @@ class Manager:
             self._barrier(action="check_truck")
             time.sleep(2)
             self._flush_topic("plc_sampler/status")
+            time.sleep(2)
             print("[MANAGER] Emergency stop cleared. Resuming operation ")
             
             # Reset successful cycles and return to CYCLE_CONFIRM
