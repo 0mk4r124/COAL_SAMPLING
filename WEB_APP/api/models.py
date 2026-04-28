@@ -12,6 +12,7 @@ class VEHICLE_LOGS(models.Model):
     sample_3_img_path = models.CharField(db_column='SAMPLE_3_IMG_PATH', max_length=500, blank=True, null=True)
     report_path = models.CharField(db_column='REPORT_PATH', max_length=500, blank=True, null=True)
     status = models.CharField(db_column='STATUS', max_length=20, blank=True, null=True)
+    is_synced = models.CharField(db_column='IS_SYNCED', max_length=20, blank=True, null=True)
     error_message = models.CharField(db_column='ERROR_MESSAGE', max_length=500, blank=True, null=True)
     
     create_time = models.DateTimeField(db_column='CREATE_TIME', blank=True, null=True)

@@ -77,7 +77,7 @@ class Printer:
 
         return ( '{"MessageName":"VAHICALDATA","KeyValue":[{'
             f'"Eth_0":"{vehicle}|{vendor}|{dt}",'
-            f'"Eth_1":"{vehicle}",'
+            f'"Eth_1":"-",'
             f'"Eth_2":"{dt}"'
             '}]}'
         )

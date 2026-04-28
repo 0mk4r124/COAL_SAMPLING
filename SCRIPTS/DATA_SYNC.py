@@ -4,6 +4,7 @@ import time
 import base64
 import pymysql
 import requests
+import threading
 
 from datetime import datetime, timedelta
 
@@ -11,8 +12,8 @@ from datetime import datetime, timedelta
 DB_CONFIG = {
     "host": "localhost",
     "user": "root",
-    "password": "root",
-    "database": "your_db"
+    "password": "insightzz@123",
+    "database": "COAL_SAMPLING_DHAR"
 }
 
 DATA_API_URL = "https://www.insightzz-analytics.com/Ultratech//DharCoalAjaxReqController?apiName=syncDharCoalDataTable"
@@ -31,46 +32,46 @@ def get_db():
 
 # -------- FETCH DATA (MATCHES DJANGO LOGIC) --------
 def fetch_unsynced_rows(limit=BATCH_SIZE):
-    rows = [{
-        "uid": "uid1223",
-        "rfids": "rfids3434",
-        "vehicle_number": "vehicle_number32342",
-        "create_time": "create_time234234",
-        "vendor_name": "vendor_name234234",
-        "vendor_code": "vendor_code234234",
+    # rows = [{
+    #     "uid": "uid1223",
+    #     "rfids": "rfids3434",
+    #     "vehicle_number": "vehicle_number32342",
+    #     "create_time": "create_time234234",
+    #     "vendor_name": "vendor_name234234",
+    #     "vendor_code": "vendor_code234234",
 
-        "vehicle_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
-        "sample_1_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
-        "sample_2_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
-        "sample_3_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
-        "report_path": "/home/omkar/Downloads/Project_Timeline_MOM.pdf",
-    }]
-    # db = get_db()
-    # cur = db.cursor()
+    #     "vehicle_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
+    #     "sample_1_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
+    #     "sample_2_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
+    #     "sample_3_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
+    #     "report_path": "/home/omkar/Downloads/Project_Timeline_MOM.pdf",
+    # }]
+    db = get_db()
+    cur = db.cursor()
 
-    # query = f"""
-    # SELECT vl.*,
-    #        vm.vehicle_number,
-    #        vm.vendor_code,
-    #        vdm.vendor_name
-    # FROM VEHICLE_LOGS vl
-    # LEFT JOIN VEHICLE_MASTER vm 
-    #     ON FIND_IN_SET(vm.rfid, REPLACE(vl.rfids, '|', ',')) > 0
-    # LEFT JOIN VENDOR_MASTER vdm 
-    #     ON vm.vendor_code = vdm.vendor_code
-    # WHERE vl.status = 'COMPLETED'
-    #   AND (vl.is_synced = 0 OR vl.is_synced IS NULL)
-    # ORDER BY vl.create_time ASC
-    # LIMIT {limit}
-    # """
+    query = f"""
+    SELECT vl.*,
+           vm.vehicle_number,
+           vm.vendor_code,
+           vdm.vender_name
+    FROM VEHICLE_LOGS vl
+    LEFT JOIN VEHICLE_MASTER vm 
+        ON vm.rfid = vl.rfids
+    LEFT JOIN VENDOR_MASTER vdm 
+        ON vm.vendor_code = vdm.vendor_code
+    WHERE vl.status = 'COMPLETED'
+      AND (vl.is_synced = 0 OR vl.is_synced IS NULL)
+    ORDER BY vl.create_time ASC
+    LIMIT {limit}
+    """
 
-    # cur.execute(query)
-    # rows = cur.fetchall()
+    cur.execute(query)
+    rows = cur.fetchall()
 
-    # cur.close()
-    # db.close()
+    cur.close()
+    db.close()
+
     return rows
-
 
 # -------- UPDATE STATUS --------
 def mark_synced(record_id):
@@ -78,7 +79,7 @@ def mark_synced(record_id):
     cur = db.cursor()
 
     cur.execute(
-        "UPDATE VEHICLE_LOGS SET is_synced = 1 WHERE id = %s",
+        "UPDATE VEHICLE_LOGS SET is_synced = 1 WHERE UID = %s",
         (record_id,)
     )
 
@@ -92,6 +93,7 @@ def encode_file(relative_path):
     if not relative_path:
         return None
 
+    # if "pdf" in relative_path: relative_path = relative_path.split('.pdf')[0] + "_compressed.pdf"
     abs_path = os.path.join(relative_path)
 
     if not os.path.exists(abs_path):
@@ -105,23 +107,23 @@ def encode_file(relative_path):
         print(f"[ERROR] Failed reading: {abs_path}, {e}")
         return None
 
+def to_minutes(s):
+    if s["total"] == 0:
+        return 0
+    return round((s["online"] / s["total"]) * 1440)
 
 # -------- BUILD PAYLOAD --------
 def build_payload(row):
     return {
         "data": {
-            "UID": row["uid"],
-            "RFIDS": row["rfids"],
+            "UID": row["UID"],
+            "RFIDS": row["RFIDS"],
             "VEHICLE_NUM": row.get("vehicle_number"),
-            "DT_STAMP": str(datetime.now()),
-            "VENDOR_NAME": row.get("vendor_name"),
+            "DT_STAMP": str(row.get("CREATE_TIME")),
+            "VENDOR_NAME": row.get("vender_name"),
             "VENDOR_CODE": row.get("vendor_code"),
 
-            # "VEHICLE_IMG": encode_file(row.get("vehicle_img_path")),
-            # "SAMPLE_IMG_1": encode_file(row.get("sample_1_img_path")),
-            # "SAMPLE_IMG_2": encode_file(row.get("sample_2_img_path")),
-            # "SAMPLE_IMG_3": encode_file(row.get("sample_3_img_path")),
-            "REPORT_PATH": encode_file(row.get("report_path"))
+            "REPORT_PATH": encode_file(row.get("REPORT_PATH"))
         }
     }
 
@@ -151,12 +153,6 @@ def build_payload_uptime():
             if status == "ONLINE":
                 stats[dtype]["online"] += 1
 
-    # convert to minutes (out of 1440)
-    def to_minutes(s):
-        if s["total"] == 0:
-            return 0
-        return round((s["online"] / s["total"]) * 1440)
-
     payload = {
         "conveyorList": [{
             "ID": int(time.time()),  # epoch
@@ -164,16 +160,17 @@ def build_payload_uptime():
             "PLC_UPTIME": to_minutes(stats.get("PLC", {"total": 0, "online": 0})),
             "SERVER_UPTIME": to_minutes(stats.get("SERVER", {"total": 0, "online": 0})),
             "INTERNET_UPTIME": to_minutes(stats.get("INTERNET", {"total": 0, "online": 0})),
-            "CURRENT_DATETTIME": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "CURRENT_DATETTIME": (datetime.now() - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"),
         }]
     }
 
     return payload
 
 # -------- API CALL --------
-def send_to_server(payload):
+def send_to_server(payload, api="data"):
     try:
-        res = requests.post(UPTIME_API_URL, json=payload)
+        if api == "data": res = requests.post(DATA_API_URL, json=payload)
+        else: res = requests.post(UPTIME_API_URL, json=payload)
 
         if res.status_code != 200:
             print(f"[SYNC] HTTP Error: {res.status_code}")
@@ -207,10 +204,10 @@ def run_sync():
                     success = send_to_server(payload)
 
                     if success:
-                        mark_synced(row["id"])
-                        print(f"[SYNC] Success UID: {row['uid']}")
+                        mark_synced(row["UID"])
+                        print(f"[SYNC] Success UID: {row['UID']}")
                     else:
-                        print(f"[SYNC] Failed UID: {row['uid']}")
+                        print(f"[SYNC] Failed UID: {row['UID']}")
 
         except Exception as e:
             print(f"[SYNC] Loop error: {e}")
@@ -226,14 +223,14 @@ def run_uptime_sync():
     while True:
         now = datetime.now()
 
-        if now.hour == 0 and now.minute == 10:
+        if now.hour == 0 and now.minute == 20:
             if last_run_date != now.date():
                 print("[SYNC] Running uptime sync...")
 
                 payload = build_payload_uptime()
 
                 if payload:
-                    success = send_to_server(payload)
+                    success = send_to_server(payload, api="uptime")
 
                     if success:
                         print("[SYNC] Uptime sent successfully")
@@ -245,4 +242,12 @@ def run_uptime_sync():
         time.sleep(30)
 
 if __name__ == "__main__":
-    run_uptime_sync()
+    t1 = threading.Thread(target=run_uptime_sync, name="UptimeSyncThread", daemon=True)
+    t2 = threading.Thread(target=run_sync, name="SyncThread", daemon=True)
+
+    t1.start()
+    t2.start()
+
+    # Keep main thread alive if needed
+    t1.join()
+    t2.join()

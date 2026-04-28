@@ -129,11 +129,12 @@ def generate_sampling_report(report_data: dict) -> bool:
         # -------- SAVE --------
         os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
         pdf.output(pdf_path)
+        compressed_path = pdf_path.replace(".pdf", "_compressed.pdf")
         cmd = [
-            "gs",
+            r"C:\Program Files\gs\gs10.03.0\bin\gswin64c.exe",  # FIXED
             "-sDEVICE=pdfwrite",
             "-dCompatibilityLevel=1.4",
-            "-dPDFSETTINGS=/screen",   # strongest compression
+            "-dPDFSETTINGS=/screen",
             "-dDownsampleColorImages=true",
             "-dColorImageResolution=72",
             "-dDownsampleGrayImages=true",
@@ -143,11 +144,20 @@ def generate_sampling_report(report_data: dict) -> bool:
             "-dNOPAUSE",
             "-dQUIET",
             "-dBATCH",
-            f"-sOutputFile={pdf_path}",
+            f"-sOutputFile={compressed_path}",
             pdf_path
         ]
-        subprocess.run(cmd)
- 
+
+        try:
+            subprocess.run(cmd, check=True)
+
+            if os.path.exists(compressed_path):
+                os.replace(compressed_path, pdf_path)
+                print("[PDF] Compression successful")
+
+        except Exception as e:
+            print(f"[PDF] Compression failed: {e}")
+        
         return True
 
     except Exception as e:
@@ -173,7 +183,7 @@ def get_sample_positions(used_areas=None, prev_points=None):
     area = random.choice(available_areas)
 
     # Global bounds
-    x_min, x_max = 40, 100
+    x_min, x_max = 35, 100
     y_min, y_max = 45, 80
 
     # Grid split
@@ -254,15 +264,16 @@ def db_resolve_bucket(rfid: str, vendor_code: str) -> int:
         db = _db_connect()
         cur = db.cursor(pymysql.cursors.DictCursor)
 
-        # Get today's logs (optimized range instead of DATE())
+        # Exact match instead of LIKE
         cur.execute(
             """
-            SELECT vl.BUCKET_NO, vl.RFIDS, vm.VENDOR_CODE
+            SELECT vl.BUCKET_NO, vm.VENDOR_CODE
             FROM VEHICLE_LOGS vl
             LEFT JOIN VEHICLE_MASTER vm
-                ON vl.RFIDS LIKE CONCAT('%', vm.RFID, '%')
+                ON vl.RFIDS = vm.RFID
             WHERE vl.CREATE_TIME >= CURDATE()
               AND vl.CREATE_TIME < CURDATE() + INTERVAL 1 DAY
+              AND vl.STATUS = 'COMPLETED'
             """
         )
         rows = cur.fetchall()
@@ -274,6 +285,7 @@ def db_resolve_bucket(rfid: str, vendor_code: str) -> int:
         vendor_bucket = None
 
         for row in rows:
+            logger.debug(f"Bucket row: {row}")
             bucket = row.get("BUCKET_NO")
             vc = row.get("VENDOR_CODE")
 
@@ -281,25 +293,27 @@ def db_resolve_bucket(rfid: str, vendor_code: str) -> int:
                 bucket = int(bucket)
                 used_buckets.add(bucket)
 
-                # Same vendor --> reuse
+                # Same vendor → reuse bucket
                 if vc == vendor_code and vendor_bucket is None:
                     vendor_bucket = bucket
 
+        logger.debug(f"vendor bucket: {vendor_bucket} || used buckets: {used_buckets}")
         if vendor_bucket:
             return vendor_bucket
 
-        # Find first free bucket (1–10)
+        # Next free bucket
         for i in range(1, 11):
             if i not in used_buckets:
                 return i
 
-        # All used --> cyclic
+        # Wrap around
         return (max(used_buckets) % 10) + 1
 
     except Exception as e:
         print(f"[DB] db_resolve_bucket error: {e}")
         logger.error(f"{traceback.format_exc()}")
         return 1
+
     finally:
         if db:
             db.close()
@@ -881,11 +895,8 @@ class Manager:
         if vehicle:
             self.vehicle = vehicle
             vendor_code = vehicle.get("VENDOR_CODE")
-            
-            # Use cached bucket_no if already set, otherwise resolve
-            if self.bucket_no == 1:  # Default value, not yet resolved
-                rfid_key = build_rfid_key(self.rfids, self.uid)
-                self.bucket_no = db_resolve_bucket(rfid_key, vendor_code)
+            rfid_key = build_rfid_key(self.rfids, self.uid)
+            self.bucket_no = db_resolve_bucket(rfid_key, vendor_code)
             
             db_bucket_update_log(self.uid, self.bucket_no)
             db_add_plc_comm(self.uid, self.state.name)
@@ -1245,7 +1256,7 @@ class Manager:
                 "vendor_code": self.vehicle.get("VENDOR_CODE"),
                 "vendor": self.vehicle.get("VENDER_NAME"),
                 "paths": self.paths,
-                "bucket_no": self.vehicle.get("BUCKET_NO")
+                "bucket_no": self.bucket_no
             }
 
             generate_sampling_report(report_data)

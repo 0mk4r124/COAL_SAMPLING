@@ -14,7 +14,9 @@ DB_CONFIG = {
     "cursorclass": pymysql.cursors.DictCursor
 }
 
-BASE_DIR = "health_logs"
+BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
+HEALTH_LOGS = os.path.join(BASE_FILE_PATH, "HEALTH_LOGS")
+LOGS_PATH = os.path.join(BASE_FILE_PATH, "LOGS")
 PING_TIMEOUT = 3
 
 def get_connection():
@@ -38,7 +40,7 @@ def ping(ip):
         return False
 
 def get_csv_path(now):
-    return os.path.join(BASE_DIR, now.strftime("%Y-%m-%d") + ".csv")
+    return os.path.join(HEALTH_LOGS, now.strftime("%Y-%m-%d") + ".csv")
 
 
 def write_header_if_needed(file_path):
@@ -72,8 +74,9 @@ def log_devices(conn, now):
     for d in devices:
         is_online = ping(d["IP"])
         status = "ONLINE" if is_online else "OFFLINE"
+        db_status = "ACTIVE" if is_online else "INACTIVE"
 
-        update_device(conn, d["ID"], status)
+        update_device(conn, d["ID"], db_status)
 
         rows.append([
             timestamp,
@@ -88,23 +91,23 @@ def log_devices(conn, now):
         writer.writerows(rows)
 
 def cleanup_old_files(now):
-    if not os.path.exists(BASE_DIR):
+    if not os.path.exists(HEALTH_LOGS):
         return
 
-    for file in os.listdir(BASE_DIR):
+    for file in os.listdir(HEALTH_LOGS):
         if not file.endswith(".csv"):
             continue
 
         try:
             file_date = datetime.strptime(file.replace(".csv", ""), "%Y-%m-%d")
             if (now - file_date).days > 3:
-                os.remove(os.path.join(BASE_DIR, file))
+                os.remove(os.path.join(HEALTH_LOGS, file))
                 print(f"[CLEANUP] Deleted {file}")
         except Exception:
             continue
 
 def calculate_uptime(date_str):
-    file_path = os.path.join(BASE_DIR, f"{date_str}.csv")
+    file_path = os.path.join(HEALTH_LOGS, f"{date_str}.csv")
 
     if not os.path.exists(file_path):
         print(f"[WARN] No file for {date_str}")
@@ -143,7 +146,7 @@ def calculate_uptime(date_str):
 
 def main():
     print("[START] Health monitor running...")
-    os.makedirs(BASE_DIR, exist_ok=True)
+    os.makedirs(HEALTH_LOGS, exist_ok=True)
 
     last_report_date = None
 
