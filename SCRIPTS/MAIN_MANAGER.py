@@ -14,7 +14,9 @@ from DEPENDANT.LOGGING import initializeLogger
 
 from LOGIC import (
     initialize_ai_model,
-    confirm_auger_position
+    confirm_auger_position,
+    generate_sampling_report,
+    compress_pdf
 )
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -64,105 +66,6 @@ def build_rfid_key(rfids, uid=None):
         return f"{uid}|{rfids[0]}" if uid else rfids[0]
 
     return "|".join(rfids)
-
-def normalize_path(path: str) -> str:
-    return path.replace("\\", "/")
-
-def add_image(pdf, title, img_path):
-    if not img_path or not os.path.exists(img_path):
-        return
-
-    pdf.add_page()
-
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(270, 12, title, 0, 1, "C")
-
-    from PIL import Image
-    img = Image.open(img_path)
-    w, h = img.size
-    img.close()
-
-    max_h = 180
-    scale = max_h / h
-    new_w = w * scale
-
-    pdf.image(img_path, x=20, y=25, w=new_w, h=max_h)
-
-def generate_sampling_report(report_data: dict) -> bool:
-    try:
-        pdf_path = report_data.get("pdf_path")
-        uid = report_data.get("uid")
-        rfids = report_data.get("rfids", [])
-        vehicle = report_data.get("vehicle", "UNKNOWN")
-        vendor_code = report_data.get("vendor_code", "UNKNOWN")
-        vendor = report_data.get("vendor", "UNKNOWN")
-        paths = report_data.get("paths", {})
-        bucket_no = report_data.get("bucket_no", 1)
-
-        pdf = FPDF(orientation="L", unit="mm", format="A4")
-        pdf.add_page()
-
-        # -------- HEADER --------
-        pdf.set_font("Arial", "B", 22)
-        pdf.cell(270, 12, "COAL SAMPLING REPORT", 0, 1, "C")
-
-        pdf.set_font("Arial", "", 14)
-        pdf.ln(5)
-
-        # -------- METADATA --------
-        pdf.cell(270, 10, f"UID: {uid}", 0, 1)
-        pdf.cell(270, 10, f"RFIDs: {rfids}", 0, 1)
-
-        pdf.cell(270, 10, f"Vehicle: {vehicle}", 0, 1)
-        pdf.cell(270, 10, f"Vendor Code: {vendor_code}", 0, 1)
-        pdf.cell(270, 10, f"Vendor: {vendor}", 0, 1)
-
-        pdf.cell(270, 10, f"DateTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", 0, 1)
-        pdf.cell(270, 10, f"Bucket Number: {bucket_no}", 0, 1)
-
-        # -------- IMAGES --------
-        add_image(pdf, "Vehicle Image", paths.get("VEHICLE_IMG_PATH"))
-
-        for i in range(1, 4):
-            add_image(pdf, f"Sample {i}", paths.get(f"SAMPLE_{i}_IMG_PATH"))
-
-        # -------- SAVE --------
-        os.makedirs(os.path.dirname(pdf_path), exist_ok=True)
-        pdf.output(pdf_path)
-        compressed_path = pdf_path.replace(".pdf", "_compressed.pdf")
-        cmd = [
-            r"C:\Program Files\gs\gs10.03.0\bin\gswin64c.exe",  # FIXED
-            "-sDEVICE=pdfwrite",
-            "-dCompatibilityLevel=1.4",
-            "-dPDFSETTINGS=/screen",
-            "-dDownsampleColorImages=true",
-            "-dColorImageResolution=72",
-            "-dDownsampleGrayImages=true",
-            "-dGrayImageResolution=72",
-            "-dDownsampleMonoImages=true",
-            "-dMonoImageResolution=72",
-            "-dNOPAUSE",
-            "-dQUIET",
-            "-dBATCH",
-            f"-sOutputFile={compressed_path}",
-            pdf_path
-        ]
-
-        try:
-            subprocess.run(cmd, check=True)
-
-            if os.path.exists(compressed_path):
-                os.replace(compressed_path, pdf_path)
-                print("[PDF] Compression successful")
-
-        except Exception as e:
-            print(f"[PDF] Compression failed: {e}")
-        
-        return True
-
-    except Exception as e:
-        print(f"[PDF] Error: {e}")
-        return False
 
 def get_sample_positions(used_areas=None, prev_points=None):
     if used_areas is None:
@@ -1260,6 +1163,7 @@ class Manager:
             }
 
             generate_sampling_report(report_data)
+            compress_pdf(report_data["pdf_path"])
         except Exception as e: 
             print(f"[MANAGER] Error (generate_sampling_report) - {e}")
             logger.error(f"{traceback.format_exc()}")

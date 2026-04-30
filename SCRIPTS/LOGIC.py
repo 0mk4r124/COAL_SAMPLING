@@ -2,11 +2,17 @@ import cv2
 import os
 import qrcode
 import traceback
+import tempfile
+import uuid
+import subprocess
 
 from datetime import datetime
+from fpdf import FPDF
+from PIL import Image
 
 from DEPENDANT.INFERENCE import MASKRCNN
 from DEPENDANT.LOGGING import initializeLogger
+
 
 # AI Model Initialization 
 BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
@@ -15,6 +21,8 @@ MODEL_PATH = BASE_FILE_PATH + 'MODEL/COAL_SAMPLING_27MAR/'
 MODEL_FILE = 'model_final.pth'
 CLASS_JSON = BASE_FILE_PATH + 'MODEL/COAL_SAMPLING_27MAR/COAL_SAMPLING_27MAR.json'
 LOGS_PATH = BASE_FILE_PATH + "/LOGS/"
+LEFT_LOGO_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/WEB_APP/static/logo/utcl.png"
+RIGHT_LOGO_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/WEB_APP/static/logo/insightzz_logo.png"
 
 # Initialize logger
 logger = initializeLogger("LOGIC_MANAGER", LOGS_PATH=LOGS_PATH)
@@ -343,6 +351,267 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         logger.error(f"Error generating QR code: {e}", exc_info=True)
         print(f"ERROR: Error generating QR code: {e}")
         return ""
+
+def compress_pdf(input_path: str, output_path: str = None, quality: str = "screen") -> str | None:
+    if not os.path.exists(input_path):
+        print(f"[PDF] Input file not found: {input_path}")
+        return None
+
+    if output_path is None:
+        output_path = input_path.replace(".pdf", "_compressed.pdf")
+
+    # Detect OS-specific Ghostscript binary
+    gs_cmd = "gs"
+    if os.name == "nt":
+        gs_cmd = r"C:\Program Files\gs\gs10.03.0\bin\gswin64c.exe"
+
+    cmd = [
+        gs_cmd,
+        "-sDEVICE=pdfwrite",
+        "-dCompatibilityLevel=1.4",
+        f"-dPDFSETTINGS=/{quality}",
+        "-dNOPAUSE",
+        "-dQUIET",
+        "-dBATCH",
+        f"-sOutputFile={output_path}",
+        input_path,
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+
+        if os.path.exists(output_path):
+            print(f"[PDF] Compression successful: {output_path}")
+            return output_path
+        else:
+            print("[PDF] Compression failed: Output not created")
+            return None
+
+    except Exception as e:
+        print(f"[PDF] Compression failed: {e}")
+        return None
+
+def clean_logo(img_path: str, name: str) -> str | None:
+    """
+    Removes black background-ish pixels and converts the logo to a clean RGB PNG.
+    A unique temp file is created for each logo so left/right logos do not overwrite each other.
+    """
+    try:
+        img = Image.open(img_path).convert("RGBA")
+
+        # Remove near-black background
+        pixels = []
+        for r, g, b, a in img.getdata():
+            if r < 25 and g < 25 and b < 25:
+                pixels.append((255, 255, 255, 0))  # transparent
+            else:
+                pixels.append((r, g, b, a))
+        img.putdata(pixels)
+
+        # Composite on white so FPDF gets a clean RGB PNG
+        white_bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        white_bg.alpha_composite(img)
+        rgb_img = white_bg.convert("RGB")
+
+        tmp_path = os.path.join(tempfile.gettempdir(), f"{name}_{uuid.uuid4().hex}.png")
+        rgb_img.save(tmp_path, format="PNG")
+        return tmp_path
+
+    except Exception as e:
+        print(f"[IMG] Logo prepare failed for {img_path}: {e}")
+        return None
+
+
+def image_size_mm(img_path: str, max_width_mm: float) -> tuple[float, float]:
+    """
+    Returns width and height in mm, scaled to fit max_width_mm.
+    """
+    img = Image.open(img_path)
+    w_px, h_px = img.size
+
+    # Approx conversion assuming 96 DPI
+    w_mm = w_px * 0.264583
+    h_mm = h_px * 0.264583
+
+    scale = min(max_width_mm / w_mm, 1.0)
+    return w_mm * scale, h_mm * scale
+
+class SamplingPDF(FPDF):
+    def __init__(self, left_logo=None, right_logo=None):
+        super().__init__(orientation="L", unit="mm", format="A4")
+        self.set_margins(10, 12, 10)
+        self.set_auto_page_break(auto=True, margin=12)
+        self.alias_nb_pages()
+
+        self.left_logo = clean_logo(left_logo, "left_logo") if left_logo else None
+        self.right_logo = clean_logo(right_logo, "right_logo") if right_logo else None
+
+        self.set_creator("Coal Sampling System")
+        self.set_author("Coal Sampling System")
+        self.set_title("Coal Sampling Report")
+
+    def header(self):
+        top_y = 8
+
+        # Logos
+        if self.left_logo and os.path.exists(self.left_logo):
+            self.image(self.left_logo, 10, top_y-2, 20)
+
+        if self.right_logo and os.path.exists(self.right_logo):
+            self.image(self.right_logo, self.w - 38, top_y, 28)
+
+        # Center title
+        self.set_y(10)
+        self.set_font("Arial", "B", 18)
+        self.cell(0, 8, "COAL SAMPLING REPORT", border=0, ln=1, align="C")
+
+        self.set_font("Arial", "", 10)
+        self.cell(0, 6, "Sampling & Traceability Record", border=0, ln=1, align="C")
+
+        # Separator
+        self.ln(2)
+        self.set_line_width(0.6)
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
+        self.ln(4)
+
+    def footer(self):
+        self.set_y(-10)
+        self.set_line_width(0.3)
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
+
+        self.set_font("Arial", "", 8)
+        self.cell(0, 5, f"Page {self.page_no()}/{{nb}}", align="R")
+
+
+def add_section_title(pdf: FPDF, title: str):
+    pdf.ln(2)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, title, ln=1)
+    pdf.set_line_width(0.35)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(3)
+
+
+def add_metadata_table(pdf: FPDF, data: dict):
+    """
+    Industrial style key-value table.
+    Two key-value pairs per row.
+    """
+    rows = [
+        ("UID", data.get("uid", "")),
+        ("RFIDs", ", ".join(data.get("rfids", []))),
+        ("Vehicle Number", data.get("vehicle", "")),
+        ("Vendor Code", data.get("vendor_code", "")),
+        ("Vendor Name", data.get("vendor", "")),
+        ("Date & Time", data.get("datetime", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))),
+        ("Bucket Number", str(data.get("bucket_no", ""))),
+    ]
+
+    pdf.set_font("Arial", "", 10)
+
+    label_w = 60
+    value_w = pdf.w - pdf.l_margin - pdf.r_margin - label_w
+    row_h = 9
+
+    for label, value in rows:
+        # Label cell
+        pdf.set_font("Arial", "B", 10)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.cell(label_w, row_h, label, border=1, fill=True)
+
+        # Value cell
+        pdf.set_font("Arial", "", 10)
+        txt = str(value) if value is not None else ""
+        pdf.cell(value_w, row_h, txt, border=1)
+
+        pdf.ln(row_h)
+
+    pdf.ln(2)
+
+
+def add_image_block(pdf: FPDF, title: str, img_path: str):
+    """
+    Keeps the title and image together on the same page.
+    Scales image to fit page width and available height.
+    """
+    if not img_path or not os.path.exists(img_path):
+        return
+
+    max_width = pdf.w - pdf.l_margin - pdf.r_margin
+
+    # Estimate image block height before writing anything
+    w_mm, h_mm = image_size_mm(img_path, max_width)
+    title_h = 7
+    block_h = title_h + 2 + h_mm + 4
+
+    # If block won't fit, move to new page first
+    remaining = pdf.h - pdf.b_margin - pdf.get_y()
+    if block_h > remaining:
+        pdf.add_page()
+
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, title_h, title, ln=1)
+
+    pdf.set_line_width(0.25)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(2)
+
+    # Recalculate with the fresh page space if needed
+    available_width = pdf.w - pdf.l_margin - pdf.r_margin
+    available_height = pdf.h - pdf.b_margin - pdf.get_y() - 2
+
+    img = Image.open(img_path)
+    w_px, h_px = img.size
+    w_mm_raw = w_px * 0.264583
+    h_mm_raw = h_px * 0.264583
+
+    scale = min(available_width / w_mm_raw, available_height / h_mm_raw, 1.0)
+    new_w = w_mm_raw * scale
+    new_h = h_mm_raw * scale
+
+    x = pdf.l_margin + (available_width - new_w) / 2
+    pdf.image(img_path, x=x, w=new_w, h=new_h)
+    pdf.ln(new_h + 4)
+
+
+def generate_sampling_report(report_data: dict) -> bool:
+    try:
+        pdf_path = report_data.get("pdf_path")
+        paths = report_data.get("paths", {})
+
+        if not pdf_path:
+            raise ValueError("pdf_path is required")
+
+        pdf = SamplingPDF(
+            left_logo=LEFT_LOGO_PATH,
+            right_logo=RIGHT_LOGO_PATH
+        )
+        pdf.add_page()
+
+        # -------- REPORT META --------
+        add_section_title(pdf, "GENERAL INFORMATION")
+        add_metadata_table(pdf, report_data)
+
+        # -------- IMAGES --------
+        # add_section_title(pdf, "IMAGE CAPTURE")
+
+        add_image_block(pdf, "Vehicle Image", paths.get("VEHICLE_IMG_PATH"))
+
+        for i in range(1, 4):
+            add_image_block(pdf, f"Coal Sample {i} Image", paths.get(f"SAMPLE_{i}_IMG_PATH"))
+
+        # -------- SAVE --------
+        out_dir = os.path.dirname(pdf_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
+        pdf.output(pdf_path)
+        print(f"[PDF] Report generated: {pdf_path}")
+        return True
+
+    except Exception as e:
+        print(f"[PDF] Error: {e}")
+        return False
 
 if __name__ == "__main__":
     # generate_qr_code("OMKAR", "1234", "345", "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/TEST_QR.png")
