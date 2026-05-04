@@ -14,6 +14,11 @@ let emergencyModalOpen = false;
 let autoManualModalOpen = false;
 let statusCheckInterval = null;
 
+// Print job state
+let pendingPrintRow     = null;
+let printCountdownTimer = null;
+let printModalInstance  = null;
+
 const img = document.getElementById("modalImage");
 const wrapper = document.getElementById("zoomWrapper");
 const modalElement = document.getElementById('vehicleDetailsModal');
@@ -183,6 +188,13 @@ function updateCurrentStatus() {
             document.getElementById('dashVehicleNumber').textContent = data.vehicle_number || 'NOT FOUND';
             
             currentUID = data.uid;
+
+            // Retake button state
+            const retakeBtn = document.getElementById('retakeBtn');
+            if (retakeBtn) {
+                retakeBtn.disabled = !data.retake_available;
+            }
+            lastErrorUID = data.last_error_uid || null;
             
         })
         .catch(err => console.error("Status update failed:", err));
@@ -293,6 +305,154 @@ function downloadHistoryData() {
     }
 
     window.open(url, '_blank');
+}
+
+function sendPrintData(row) {
+    pendingPrintRow = row;
+
+    // Reset modal to initial state
+    const footer    = document.getElementById('printModalFooter');
+    const countdown = document.getElementById('printCountdownSection');
+    const btn       = document.getElementById('confirmPrintBtn');
+
+    footer.style.display    = '';
+    countdown.style.display = 'none';
+    btn.disabled            = false;
+    btn.innerHTML           = '<i class="fas fa-print"></i> Send Print';
+
+    document.getElementById('printConfirmText').innerHTML =
+        `Send print job for: <strong>${row.vehicle_number}</strong> &mdash; ${row.vendor_name}<br>
+         <small class="text-muted">${row.datetimestamp}</small>`;
+
+    if (!printModalInstance) {
+        printModalInstance = new bootstrap.Modal(
+            document.getElementById('printConfirmModal'),
+            { backdrop: 'static', keyboard: false }
+        );
+    }
+    printModalInstance.show();
+}
+
+function confirmSendPrint() {
+    if (!pendingPrintRow) return;
+
+    const row = pendingPrintRow;
+    const btn = document.getElementById('confirmPrintBtn');
+    btn.disabled  = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Sending...';
+
+    fetch('/api/send_print_data/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            vehicle_number: row.vehicle_number,
+            vendor_name:    row.vendor_name,
+            dtstamp:        row.datetimestamp
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            document.getElementById('printModalFooter').style.display = 'none';
+            document.getElementById('printCountdownSection').style.display = '';
+            startPrintCountdown(120);
+        } else {
+            btn.disabled  = false;
+            btn.innerHTML = '<i class="fas fa-print"></i> Send Print';
+            alert('❌ Print failed: ' + (res.error || 'Unknown error'));
+        }
+    })
+    .catch(err => {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="fas fa-print"></i> Send Print';
+        console.error(err);
+        alert('❌ Network error while sending print job');
+    });
+}
+
+function startPrintCountdown(seconds) {
+    let remaining = seconds;
+    document.getElementById('printCountdownDisplay').textContent = remaining;
+    clearInterval(printCountdownTimer);
+    printCountdownTimer = setInterval(() => {
+        remaining--;
+        document.getElementById('printCountdownDisplay').textContent = remaining;
+        if (remaining <= 0) {
+            clearInterval(printCountdownTimer);
+            sendStopPrint();
+        }
+    }, 1000);
+}
+
+function stopPrintEarly() {
+    clearInterval(printCountdownTimer);
+    sendStopPrint();
+}
+
+function sendStopPrint() {
+    fetch('/api/stop_print_job/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    })
+    .then(r => r.json())
+    .then(() => { if (printModalInstance) printModalInstance.hide(); })
+    .catch(err => {
+        console.error(err);
+        if (printModalInstance) printModalInstance.hide();
+    });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// RETAKE FAILED CYCLE
+// ════════════════════════════════════════════════════════════════════════════
+
+let lastErrorUID        = null;
+let retakeModalInstance = null;
+
+function retakeCycle() {
+    if (!lastErrorUID) {
+        alert('No failed cycle available to retake.');
+        return;
+    }
+    if (!retakeModalInstance) {
+        retakeModalInstance = new bootstrap.Modal(
+            document.getElementById('retakeConfirmModal'),
+            { backdrop: 'static', keyboard: false }
+        );
+    }
+    retakeModalInstance.show();
+}
+
+function confirmRetakeCycle() {
+    if (!lastErrorUID) return;
+
+    const btn = document.getElementById('confirmRetakeBtn');
+    btn.disabled  = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Starting...';
+
+    fetch('/api/retake_failed_cycle/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: lastErrorUID })
+    })
+    .then(r => r.json())
+    .then(res => {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="fas fa-redo"></i> Yes, Retake';
+        if (res.success) {
+            retakeModalInstance.hide();
+            alert('✅ Retake cycle started.\nNew session: ' + res.new_uid);
+        } else {
+            alert('❌ Retake failed: ' + (res.error || 'Unknown error'));
+        }
+    })
+    .catch(err => {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="fas fa-redo"></i> Yes, Retake';
+        console.error(err);
+        alert('❌ Network error during retake');
+    });
 }
 
 function fetchVehicleMaster(page=1) {
@@ -416,6 +576,9 @@ function populateTable(data, table_name) {
             const ReportButton = row.report_path
                 ? `<button class="btn btn-sm btn-primary" onclick="window.open('/api/serve-file/?file=${encodeURIComponent(row.report_path)}', '_blank')">Report</button>`
                 : "";
+            const PrintButton = `<button class="btn btn-sm btn-warning" onclick="sendPrintData(${JSON.stringify(row).replace(/"/g, '&quot;')})">
+                <i class="fas fa-print"></i> Print
+            </button>`;
 
             tr.innerHTML = `
                 <td>${row.sno}</td>
@@ -429,6 +592,7 @@ function populateTable(data, table_name) {
                 <td>${Img2Button}</td>
                 <td>${Img3Button}</td>
                 <td>${ReportButton}</td>
+                <td>${PrintButton}</td>
             `;
             tbody.appendChild(tr);
         });

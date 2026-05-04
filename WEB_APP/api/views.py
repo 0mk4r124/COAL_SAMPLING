@@ -16,6 +16,7 @@ from django.contrib import messages
 
 from api.models import *
 from accounts.decorators import password_expiry_required
+from accounts.MQTT import MQTT
 from datetime import datetime
 from urllib.parse import unquote, urlparse
 
@@ -517,6 +518,14 @@ def health_status(request):
 @csrf_exempt
 def get_current_status(request):
     try:
+        # ── Retake availability (always computed) ─────────────────────────────
+        last_significant = VEHICLE_LOGS.objects.filter(
+            status__in=["ERROR", "COMPLETED"]
+        ).order_by("-create_time").first()
+
+        retake_available = bool(last_significant and last_significant.status == "ERROR")
+        last_error_uid   = last_significant.uid if retake_available else None
+
         # 1. Get active vehicle
         current_vehicle = VEHICLE_LOGS.objects.filter(status="IN_PROGRESS").first()
 
@@ -531,6 +540,8 @@ def get_current_status(request):
                 "add_vehicle": "NO",
                 "emergency": None,
                 "auto_manual": None,
+                "retake_available": retake_available,
+                "last_error_uid": last_error_uid,
             })
 
         vehicle_obj = None
@@ -566,6 +577,8 @@ def get_current_status(request):
                 "vendor_code": None,
                 "emergency": None,
                 "auto_manual": None,
+                "retake_available": False,
+                "last_error_uid": None,
             })
 
         # 5. Get PLC state
@@ -588,6 +601,8 @@ def get_current_status(request):
                     "current_state": current_state,
                     "vehicle_number": vehicle_obj.vehicle_number,
                     "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
+                    "retake_available": False,
+                    "last_error_uid": None,
                 })
 
             if auto_manual == "ACTIVE":
@@ -598,6 +613,8 @@ def get_current_status(request):
                     "current_state": current_state,
                     "vehicle_number": vehicle_obj.vehicle_number,
                     "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
+                    "retake_available": False,
+                    "last_error_uid": None,
                 })
 
         # 6. Normal flow
@@ -612,6 +629,8 @@ def get_current_status(request):
             "vendor_code": vehicle_obj.vendor_code,
             "emergency": emergency,
             "auto_manual": auto_manual,
+            "retake_available": False,
+            "last_error_uid": None,
         })
 
     except Exception as e:
@@ -622,8 +641,85 @@ def get_current_status(request):
         }, status=500)
 
 @csrf_exempt
+def stop_print_job(request):
+    """Publish stop command to PRINTER service via MQTT."""
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+    try:
+        mqtt = MQTT("MANAGER_PRINT_STOP")
+        mqtt.publish("manager/printer", {"action": "stop"})
+        return JsonResponse({"success": True, "message": "Print stop sent"})
+    except Exception as e:
+        print(f"[ERROR] stop_print_job: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+@csrf_exempt
+def retake_failed_cycle(request):
+    """Restart the last ERROR cycle with a new UID, disabling the RFID reader first."""
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+    try:
+        data = json.loads(request.body)
+        uid  = data.get("uid")
+
+        if not uid:
+            return JsonResponse({"success": False, "error": "uid is required"}, status=400)
+
+        log = VEHICLE_LOGS.objects.filter(uid=uid, status="ERROR").first()
+        if not log:
+            return JsonResponse({"success": False, "error": "No ERROR log found for this uid"}, status=404)
+
+        # Extract real RFID tags: stored rfids may include old uid, strip it
+        stored_rfids = log.rfids or ""
+        rfid_parts   = [r.strip() for r in stored_rfids.split("|") if r.strip() and r.strip() != uid]
+
+        # Generate a new unique UID (YYYYMMDDHHMMSSffffff)
+        new_uid = datetime.now().strftime("%Y%m%d%H%M%S%f")
+
+        mqtt = MQTT("MANAGER_RETAKE")
+        # Tell RFID reader to stop scanning so it doesn't interfere
+        mqtt.publish("manager/rfid", {"action": "disable_reading"})
+        # Inject a synthetic RFID scan event into the main manager
+        mqtt.publish("rfid/status", {"uid": new_uid, "rfids": rfid_parts})
+
+        return JsonResponse({"success": True, "new_uid": new_uid})
+
+    except Exception as e:
+        print(f"[ERROR] retake_failed_cycle: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+@csrf_exempt
+def send_print_data(request):
+    """Publish print job to PRINTER service via MQTT."""
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+
+        vehicle_number = data.get("vehicle_number", "")
+        vendor_name    = data.get("vendor_name", "")
+        dtstamp        = data.get("dtstamp", "")
+
+        if not vehicle_number:
+            return JsonResponse({"success": False, "error": "vehicle_number is required"}, status=400)
+
+        mqtt = MQTT("MANAGER_PRINT")
+        mqtt.publish("manager/printer", {
+            "action":         "send_data",
+            "vehicle_number": vehicle_number,
+            "vendor_name":    vendor_name,
+            "dtstamp":        dtstamp,
+        })
+
+        return JsonResponse({"success": True, "message": "Print job sent"})
+
+    except Exception as e:
+        print(f"[ERROR] send_print_data: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+@csrf_exempt
 def reset_system(request):
-    """Reset entire system - mark in-progress as ERROR and reset state"""
     if request.method != "POST":
         return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
     

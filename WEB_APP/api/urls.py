@@ -12,6 +12,11 @@ urlpatterns = [
     path('edit_vehicle_master/', edit_vehicle_master, name='edit_vehicle_master'),
     path('upload_vehicle_master/', upload_vehicle_master, name='upload_vehicle_master'),
     path('download_vehicle_master/', download_vehicle_master, name='download_vehicle_master'),
+    path('get_current_status/', get_current_status, name='get_current_status'),
+    path('reset_system/', reset_system, name='reset_system'),
+    path('send_print_data/', send_print_data, name='send_print_data'),
+    path('stop_print_job/', stop_print_job, name='stop_print_job'),
+    path('retake_failed_cycle/', retake_failed_cycle, name='retake_failed_cycle'),
 
     path('health_status/', health_status, name='health_status'),
     

@@ -44,8 +44,11 @@
                         </div>
                     </div>
                     <div class="col-md-2 text-end">
-                        <button class="btn btn-danger" onclick="resetSystemConfirm()">
+                        <button class="btn btn-danger mb-2 w-100" onclick="resetSystemConfirm()">
                             <i class="fas fa-exclamation-triangle"></i> Reset System
+                        </button>
+                        <button class="btn btn-info text-white w-100" id="retakeBtn" onclick="retakeCycle()" disabled>
+                            <i class="fas fa-redo"></i> Retake Failed Cycle
                         </button>
                     </div>
                 </div>
@@ -137,6 +140,7 @@
                                 <th>SAMPLE IMAGE 2</th>
                                 <th>SAMPLE IMAGE 3</th>
                                 <th>REPORT</th>
+                                <th>PRINT</th>
                             </tr>
                         </thead>
                         <tbody id="History_body"></tbody>
@@ -475,6 +479,80 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary btn-lg" data-bs-dismiss="modal">Cancel</button>
                 <button class="btn btn-primary btn-lg" onclick="submitVehicleEdit()">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Print Confirmation Modal -->
+<div class="modal fade" id="printConfirmModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-3 border-warning">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-print"></i> Confirm Print Job
+                </h5>
+            </div>
+            <div class="modal-body">
+                <p id="printConfirmText" class="fs-6 mb-3"></p>
+                <div class="alert alert-info mb-3">
+                    <i class="fas fa-info-circle"></i>
+                    The printer will <strong>automatically stop</strong> after <strong>2 minutes</strong>.
+                    You can also stop it early.
+                </div>
+                <!-- Shown after job is sent -->
+                <div id="printCountdownSection" style="display:none;">
+                    <div class="alert alert-success d-flex align-items-center gap-3 mb-0">
+                        <i class="fas fa-check-circle fa-lg"></i>
+                        <div class="flex-grow-1">
+                            Print job sent! Auto-stop in
+                            <strong id="printCountdownDisplay">120</strong>s.
+                        </div>
+                        <button class="btn btn-sm btn-danger" onclick="stopPrintEarly()">
+                            <i class="fas fa-stop"></i> Stop Now
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" id="printModalFooter">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button class="btn btn-warning fw-bold" id="confirmPrintBtn" onclick="confirmSendPrint()">
+                    <i class="fas fa-print"></i> Send Print
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Retake Confirmation Modal -->
+<div class="modal fade" id="retakeConfirmModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-3 border-info">
+            <div class="modal-header bg-info text-white">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-redo"></i> Retake Failed Cycle
+                </h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <strong>This will restart the sampling cycle for the last failed vehicle.</strong>
+                </div>
+                <p class="fs-6">The following will happen:</p>
+                <ul class="fs-6">
+                    <li>RFID reader will be <strong>temporarily disabled</strong></li>
+                    <li>A new session will be created with a <strong>different UID</strong></li>
+                    <li>The cycle restarts <strong>from the beginning</strong></li>
+                    <li>Same vehicle / RFID tags will be reused</li>
+                </ul>
+                <p class="fs-6 text-danger fw-bold mt-2">Are you sure you want to retake?</p>
+            </div>
+            <div class="modal-footer gap-2">
+                <button class="btn btn-secondary btn-lg" data-bs-dismiss="modal">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button class="btn btn-info text-white btn-lg" id="confirmRetakeBtn" onclick="confirmRetakeCycle()">
+                    <i class="fas fa-redo"></i> Yes, Retake
+                </button>
             </div>
         </div>
     </div>
