@@ -52,6 +52,9 @@ IN_TOPICS = (
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
+def normalize_path(path: str) -> str:
+    return path.replace("\\", "/")
+
 def build_rfid_key(rfids, uid=None):
     if isinstance(rfids, str):
         rfids = rfids.split("|")

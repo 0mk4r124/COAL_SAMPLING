@@ -6,12 +6,14 @@ import shlex
 import time
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QTabWidget, QVBoxLayout, QPushButton,
-    QPlainTextEdit, QLabel, QHBoxLayout, QMainWindow, QFrame
+    QPlainTextEdit, QLabel, QHBoxLayout, QMainWindow, QFrame, QSpinBox
 )
 from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment
 from PyQt5.QtGui import QFont
 
 from tendo import singleton
+from DEPENDANT.MQTT import MQTT
+
 me = singleton.SingleInstance()
 
 BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
@@ -31,6 +33,9 @@ SERVICES = {
 }
 PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
+
+BARRIER_TOPIC_IN  = "manager/plc_barrier"
+BARRIER_TOPIC_OUT = "plc_barrier/status"
 
 # BASE_FILE_PATH = "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/"
 # SERVICES = {
@@ -356,17 +361,20 @@ class DashboardTab(QWidget):
         super().__init__()
         self.service_tabs = service_tabs
 
+        # Shared MQTT client for barrier commands
+        self.mqtt = MQTT("MANAGE_DASHBOARD")
+        self.mqtt.subscribe(BARRIER_TOPIC_OUT)
+
         layout = QVBoxLayout()
+
+        # ── Disk info ──────────────────────────────────────────────────────────
         self.disk_label = QLabel("Disk: -- | Free: --")
         layout.addWidget(self.disk_label)
 
-        # Divider line
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(line)
+        # ── Divider ────────────────────────────────────────────────────────────
+        layout.addWidget(self._divider())
 
-        # Service statuses
+        # ── Service statuses ───────────────────────────────────────────────────
         self.status_labels = {}
         for name in service_tabs:
             lbl = QLabel(f"{name}: Inactive")
@@ -374,12 +382,131 @@ class DashboardTab(QWidget):
             layout.addWidget(lbl)
             self.status_labels[name] = lbl
 
+        # ── Divider ────────────────────────────────────────────────────────────
+        layout.addWidget(self._divider())
+
+        # ── Barrier Controls ───────────────────────────────────────────────────
+        barrier_title = QLabel("🚧  Boom Barrier Controls")
+        barrier_title.setStyleSheet("color: #f0c040; font-weight: bold; font-size: 13px; margin-top: 6px;")
+        layout.addWidget(barrier_title)
+
+        barrier_btn_layout = QHBoxLayout()
+
+        self.open_btn = QPushButton("🟢  Open Barrier")
+        self.close_btn = QPushButton("🔴  Close Barrier")
+        for btn in (self.open_btn, self.close_btn):
+            btn.setStyleSheet(
+                "QPushButton { padding: 8px 16px; border-radius: 6px; background-color: #333; color: white; font-weight: bold; }"
+                "QPushButton:hover { background-color: #555; }"
+            )
+        barrier_btn_layout.addWidget(self.open_btn)
+        barrier_btn_layout.addWidget(self.close_btn)
+        layout.addLayout(barrier_btn_layout)
+
+        # ── Set Bucket ─────────────────────────────────────────────────────────
+        bucket_layout = QHBoxLayout()
+
+        bucket_lbl = QLabel("Set Bucket:")
+        bucket_lbl.setStyleSheet("color: white; font-weight: bold;")
+        self.bucket_spin = QSpinBox()
+        self.bucket_spin.setRange(1, 10)
+        self.bucket_spin.setValue(1)
+        self.bucket_spin.setFixedWidth(70)
+        self.bucket_spin.setStyleSheet(
+            "QSpinBox { background-color: #333; color: white; padding: 4px; border-radius: 4px; border: 1px solid #666; }"
+            "QSpinBox::up-button, QSpinBox::down-button { background-color: #444; }"
+        )
+
+        self.set_bucket_btn = QPushButton("⚙️  Set Bucket")
+        self.set_bucket_btn.setStyleSheet(
+            "QPushButton { padding: 8px 16px; border-radius: 6px; background-color: #333; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #555; }"
+        )
+
+        bucket_layout.addWidget(bucket_lbl)
+        bucket_layout.addWidget(self.bucket_spin)
+        bucket_layout.addWidget(self.set_bucket_btn)
+        bucket_layout.addStretch()
+        layout.addLayout(bucket_layout)
+
+        # ── MQTT feedback label ────────────────────────────────────────────────
+        self.barrier_feedback = QLabel("Barrier status: —")
+        self.barrier_feedback.setStyleSheet("color: #aaaaaa; font-style: italic; margin-top: 4px;")
+        layout.addWidget(self.barrier_feedback)
+
+        layout.addStretch()
         self.setLayout(layout)
 
-        # Timer to update info
+        # Connect barrier buttons
+        self.open_btn.clicked.connect(self.cmd_open_barrier)
+        self.close_btn.clicked.connect(self.cmd_close_barrier)
+        self.set_bucket_btn.clicked.connect(self.cmd_set_bucket)
+
+        # Timer to update dashboard + poll MQTT feedback
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_dashboard)
         self.timer.start(3000)
+
+        # Poll MQTT feedback more frequently
+        self.mqtt_poll_timer = QTimer()
+        self.mqtt_poll_timer.timeout.connect(self._poll_mqtt_feedback)
+        self.mqtt_poll_timer.start(500)
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+
+    def _divider(self):
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        return line
+
+    def _publish_barrier(self, payload: dict):
+        """Publish a command to the barrier topic."""
+        try:
+            self.mqtt.publish(BARRIER_TOPIC_IN, payload)
+            self.barrier_feedback.setStyleSheet("color: #88ccff; font-style: italic;")
+            self.barrier_feedback.setText(f"Barrier status: sent → {payload}")
+        except Exception as e:
+            self.barrier_feedback.setStyleSheet("color: red; font-style: italic;")
+            self.barrier_feedback.setText(f"Barrier status: MQTT error — {e}")
+
+    # ── barrier command slots ──────────────────────────────────────────────────
+
+    def cmd_open_barrier(self):
+        self._publish_barrier({"action": "open_barrier"})
+
+    def cmd_close_barrier(self):
+        self._publish_barrier({"action": "close_barrier"})
+
+    def cmd_set_bucket(self):
+        bucket_no = self.bucket_spin.value()
+        self._publish_barrier({"action": "set_bucket", "bucket_no": bucket_no})
+
+    # ── polling / update ───────────────────────────────────────────────────────
+
+    def _poll_mqtt_feedback(self):
+        """Read any incoming status message from plc_barrier/status."""
+        try:
+            data = self.mqtt.data
+            if data and data.get("_consumed") is not True:
+                self.mqtt.data = {**data, "_consumed": True}
+                status = data.get("status", "unknown")
+                msg    = data.get("msg", "")
+                text   = f"Barrier status: {status}" + (f" — {msg}" if msg else "")
+
+                if "error" in status:
+                    color = "red"
+                elif status in ("barrier_opened", "green_sent", "bucket_set"):
+                    color = "lightgreen"
+                elif status in ("barrier_closed", "red_sent"):
+                    color = "orange"
+                else:
+                    color = "#aaaaaa"
+
+                self.barrier_feedback.setStyleSheet(f"color: {color}; font-style: italic;")
+                self.barrier_feedback.setText(text)
+        except Exception:
+            pass
 
     def update_dashboard(self):
         root_path = "/" if os.name != "nt" else "C:\\"
