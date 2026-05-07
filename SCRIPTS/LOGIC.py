@@ -21,8 +21,8 @@ MODEL_PATH = BASE_FILE_PATH + 'MODEL/COAL_SAMPLING_27MAR/'
 MODEL_FILE = 'model_final.pth'
 CLASS_JSON = BASE_FILE_PATH + 'MODEL/COAL_SAMPLING_27MAR/COAL_SAMPLING_27MAR.json'
 LOGS_PATH = BASE_FILE_PATH + "/LOGS/"
-LEFT_LOGO_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/WEB_APP/static/logo/utcl.png"
-RIGHT_LOGO_PATH = "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/WEB_APP/static/logo/insightzz_logo.png"
+LEFT_LOGO_PATH = BASE_FILE_PATH + "/WEB_APP/static/logo/utcl.png"
+RIGHT_LOGO_PATH = BASE_FILE_PATH + "/WEB_APP/static/logo/insightzz_logo.png"
 
 # Initialize logger
 logger = initializeLogger("LOGIC_MANAGER", LOGS_PATH=LOGS_PATH)
@@ -352,6 +352,7 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         print(f"ERROR: Error generating QR code: {e}")
         return ""
 
+
 def compress_pdf(input_path: str, output_path: str = None, quality: str = "screen") -> str | None:
     if not os.path.exists(input_path):
         print(f"[PDF] Input file not found: {input_path}")
@@ -421,7 +422,6 @@ def clean_logo(img_path: str, name: str) -> str | None:
         print(f"[IMG] Logo prepare failed for {img_path}: {e}")
         return None
 
-
 def image_size_mm(img_path: str, max_width_mm: float) -> tuple[float, float]:
     """
     Returns width and height in mm, scaled to fit max_width_mm.
@@ -482,7 +482,6 @@ class SamplingPDF(FPDF):
         self.set_font("Arial", "", 8)
         self.cell(0, 5, f"Page {self.page_no()}/{{nb}}", align="R")
 
-
 def add_section_title(pdf: FPDF, title: str):
     pdf.ln(2)
     pdf.set_font("Arial", "B", 12)
@@ -490,7 +489,6 @@ def add_section_title(pdf: FPDF, title: str):
     pdf.set_line_width(0.35)
     pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
     pdf.ln(3)
-
 
 def add_metadata_table(pdf: FPDF, data: dict):
     """
@@ -527,7 +525,6 @@ def add_metadata_table(pdf: FPDF, data: dict):
         pdf.ln(row_h)
 
     pdf.ln(2)
-
 
 def add_image_block(pdf: FPDF, title: str, img_path: str):
     """
@@ -572,7 +569,6 @@ def add_image_block(pdf: FPDF, title: str, img_path: str):
     x = pdf.l_margin + (available_width - new_w) / 2
     pdf.image(img_path, x=x, w=new_w, h=new_h)
     pdf.ln(new_h + 4)
-
 
 def generate_sampling_report(report_data: dict) -> bool:
     try:
