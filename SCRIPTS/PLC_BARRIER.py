@@ -256,11 +256,11 @@ class BarrierController:
                 elif action == "close_barrier":
                     self.close_barrier()
                 elif action == "check_truck":
-                    self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
-                    # if self.truck_present():
-                    #     self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
-                    # else:
-                    #     self.mqtt.publish(TOPIC_OUT, {"status": "truck_not_present"})
+                    # self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
+                    if self.truck_present():
+                        self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
+                    else:
+                        self.mqtt.publish(TOPIC_OUT, {"status": "truck_not_present"})
                     time.sleep(0.5)
                 elif action == "set_bucket":
                     print(f"[PLC_BARRIER] Setting Bucket")
