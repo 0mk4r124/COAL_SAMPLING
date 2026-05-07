@@ -4,6 +4,7 @@ import random
 import pymysql
 import subprocess
 import traceback
+import threading
 
 from datetime import datetime
 from enum import Enum, auto
@@ -132,6 +133,35 @@ def get_sample_positions(used_areas=None, prev_points=None):
         "y": y,
         "area": area
     }
+
+def db_deactivate_manuals() -> list[str]:
+    """Clear all PLC_COMM rows where auto_manual='ACTIVE'. Returns list of affected UIDs."""
+    db = None
+    affected = []
+    try:
+        db  = _db_connect()
+        cur = db.cursor(pymysql.cursors.DictCursor)
+        cur.execute(
+            "SELECT UID FROM PLC_COMM WHERE AUTO_MANUAL = 'ACTIVE'"
+        )
+        rows = cur.fetchall()
+        affected = [r["UID"] for r in rows]
+        if affected:
+            cur.execute(
+                """
+                UPDATE PLC_COMM
+                   SET AUTO_MANUAL = NULL, UPDATED = %s
+                WHERE AUTO_MANUAL = 'ACTIVE'
+                """,
+                (datetime.now(),)
+            )
+            db.commit()
+    except Exception as e:
+        print(f"[DB] db_deactivate_manuals error: {e}")
+        logger.error(f"{traceback.format_exc()}")
+    finally:
+        if db: db.close()
+    return affected
 
 # ── State machine ─────────────────────────────────────────────────────────────
 class State(Enum):
@@ -512,6 +542,17 @@ class Manager:
         # Auger position confirmation tracking
         self._confirmation_loop_count = 0
         self._confirmation_results = []
+
+        # ── Manual watchdog ───────────────────────────────────────────────────
+        self._watchdog_mqtt = MQTT("MAIN_MANAGER_WATCHDOG")
+        self._watchdog_stop  = threading.Event()
+        self._watchdog_thread = threading.Thread(
+            target=self._manual_watchdog_loop,
+            name="ManualWatchdog",
+            daemon=True
+        )
+        self._watchdog_thread.start()
+        print("[MANAGER] Manual watchdog thread started.")
 
     def _pop(self, topic: str) -> dict | None:
         return self.mqtt.pop(topic)
@@ -1209,21 +1250,52 @@ class Manager:
         self._goto(State.IDLE)
         print("[MANAGER] Ready for next vehicle")
 
+    def _manual_watchdog_loop(self):
+        """
+        Background daemon thread.
+        Every 5 seconds: if the main state machine is IDLE (no cycle in progress)
+        and any PLC_COMM row has auto_manual='ACTIVE', deactivate it so the
+        sampler PLC is never left in manual mode between cycles.
+        """
+        WATCHDOG_INTERVAL = 5  # seconds
+
+        while not self._watchdog_stop.is_set():
+            try:
+                if self.state == State.IDLE:
+                    affected_uids = db_deactivate_manuals()
+                    if affected_uids:
+                        print(f"[WATCHDOG] Idle & manual active on UIDs {affected_uids} — deactivating.")
+                        logger.info(f"Manual watchdog deactivated auto_manual for UIDs: {affected_uids}")
+                        # Tell the sampler PLC to exit manual mode
+                        self._watchdog_mqtt.publish(
+                            "manager/plc_sampler",
+                            {"action": "deactivate_manual"}
+                        )
+            except Exception as e:
+                print(f"[WATCHDOG] Error in watchdog loop: {e}")
+                logger.error(f"[WATCHDOG] {traceback.format_exc()}")
+
+            self._watchdog_stop.wait(WATCHDOG_INTERVAL)
+
     def run(self):
         print("[MANAGER] Coal Sampling Manager started.")
 
-        while True:
-            try:
-                handler_name = self.HANDLERS.get(self.state)
-                if handler_name:
-                    getattr(self, handler_name)()
-            except Exception as e:
-                import traceback
-                print(f"[MANAGER] Unhandled exception in {self.state.name}: {e}")
-                logger.error(f"{traceback.format_exc()}")
-                self._goto(State.ERROR)
+        try:
+            while True:
+                try:
+                    handler_name = self.HANDLERS.get(self.state)
+                    if handler_name:
+                        getattr(self, handler_name)()
+                except Exception as e:
+                    import traceback
+                    print(f"[MANAGER] Unhandled exception in {self.state.name}: {e}")
+                    logger.error(f"{traceback.format_exc()}")
+                    self._goto(State.ERROR)
 
-            time.sleep(0.05)
+                time.sleep(0.05)
+        finally:
+            self._watchdog_stop.set()
+            print("[MANAGER] Watchdog thread stopped.")
 
 def main():
     while True:

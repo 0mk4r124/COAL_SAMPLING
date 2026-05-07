@@ -43,11 +43,21 @@
                             <strong>Vehicle:</strong> <span id="dashVendorName">ABC Traders</span> | <span id="dashVehicleNumber">MH 12 AB 1234</span>
                         </div>
                     </div>
-                    <div class="col-md-2 text-end">
-                        <button class="btn btn-danger mb-2 w-100" onclick="resetSystemConfirm()">
+                    <div class="col-md-2 text-end d-flex flex-column gap-2">
+                        <button class="btn btn-warning fw-semibold w-100 dashboard-ctrl-btn"
+                                id="printCurrentBtn"
+                                onclick="printCurrentVehicle()"
+                                disabled>
+                            <i class="fas fa-print"></i> Send Print Data
+                        </button>
+                        <button class="btn btn-danger fw-semibold w-100 dashboard-ctrl-btn"
+                                onclick="resetSystemConfirm()">
                             <i class="fas fa-exclamation-triangle"></i> Reset System
                         </button>
-                        <button class="btn btn-info text-white w-100" id="retakeBtn" onclick="retakeCycle()" disabled>
+                        <button class="btn btn-info text-white fw-semibold w-100 dashboard-ctrl-btn"
+                                id="retakeBtn"
+                                onclick="retakeCycle()"
+                                disabled>
                             <i class="fas fa-redo"></i> Retake Failed Cycle
                         </button>
                     </div>

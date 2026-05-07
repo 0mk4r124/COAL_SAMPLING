@@ -189,7 +189,20 @@ function updateCurrentStatus() {
             
             currentUID = data.uid;
 
-            // Retake button state
+            // ── Print Current Vehicle button ──────────────────────────────────
+            const printCurrentBtn = document.getElementById('printCurrentBtn');
+            if (printCurrentBtn) {
+                const isInProgress = data.status === 'in_progress' && !!data.vehicle_number && data.vehicle_number !== 'NOT_FOUND';
+                printCurrentBtn.disabled = !isInProgress;
+                // Cache the data so printCurrentVehicle() can use it immediately
+                window._currentVehicleData = isInProgress ? {
+                    vehicle_number: data.vehicle_number,
+                    vendor_name:    data.vendor_name,
+                    datetimestamp:  data.datetimestamp || ''
+                } : null;
+            }
+
+            // ── Retake button ─────────────────────────────────────────────────
             const retakeBtn = document.getElementById('retakeBtn');
             if (retakeBtn) {
                 retakeBtn.disabled = !data.retake_available;
@@ -336,19 +349,22 @@ function sendPrintData(row) {
 function confirmSendPrint() {
     if (!pendingPrintRow) return;
 
-    const row = pendingPrintRow;
-    const btn = document.getElementById('confirmPrintBtn');
+    const row      = pendingPrintRow;
+    const btn      = document.getElementById('confirmPrintBtn');
+    const isCurrent = row._source === 'current';
+
     btn.disabled  = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Sending...';
 
-    fetch('/api/send_print_data/', {
+    const endpoint = isCurrent ? '/api/print_current_vehicle/' : '/api/send_print_data/';
+    const body     = isCurrent
+        ? {}
+        : { vehicle_number: row.vehicle_number, vendor_name: row.vendor_name, dtstamp: row.datetimestamp };
+
+    fetch(endpoint, {
         method: 'POST',
         headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            vehicle_number: row.vehicle_number,
-            vendor_name:    row.vendor_name,
-            dtstamp:        row.datetimestamp
-        })
+        body: JSON.stringify(body)
     })
     .then(r => r.json())
     .then(res => {
@@ -401,6 +417,43 @@ function sendStopPrint() {
         console.error(err);
         if (printModalInstance) printModalInstance.hide();
     });
+}
+
+function printCurrentVehicle() {
+    const d = window._currentVehicleData;
+    if (!d) {
+        alert('No vehicle currently in progress.');
+        return;
+    }
+
+    // Populate the shared print modal with current vehicle data
+    pendingPrintRow = {
+        vehicle_number: d.vehicle_number,
+        vendor_name:    d.vendor_name,
+        datetimestamp:  d.datetimestamp,
+        _source:        'current'   // flag so confirmSendPrint hits the right endpoint
+    };
+
+    const footer    = document.getElementById('printModalFooter');
+    const countdown = document.getElementById('printCountdownSection');
+    const btn       = document.getElementById('confirmPrintBtn');
+
+    footer.style.display    = '';
+    countdown.style.display = 'none';
+    btn.disabled            = false;
+    btn.innerHTML           = '<i class="fas fa-print"></i> Send Print';
+
+    document.getElementById('printConfirmText').innerHTML =
+        `Print current vehicle: <strong>${d.vehicle_number}</strong> &mdash; ${d.vendor_name}<br>
+         <small class="text-muted">${d.datetimestamp}</small>`;
+
+    if (!printModalInstance) {
+        printModalInstance = new bootstrap.Modal(
+            document.getElementById('printConfirmModal'),
+            { backdrop: 'static', keyboard: false }
+        );
+    }
+    printModalInstance.show();
 }
 
 // ════════════════════════════════════════════════════════════════════════════

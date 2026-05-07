@@ -16,7 +16,7 @@ from django.contrib import messages
 
 from api.models import *
 from accounts.decorators import password_expiry_required
-from accounts.MQTT import MQTT
+from DEPENDANT.MQTT import MQTT
 from datetime import datetime
 from urllib.parse import unquote, urlparse
 
@@ -627,6 +627,7 @@ def get_current_status(request):
             "vehicle_number": vehicle_obj.vehicle_number,
             "vendor_name": vendor_obj.vendor_name if vendor_obj else "NOT_FOUND",
             "vendor_code": vehicle_obj.vendor_code,
+            "datetimestamp": current_vehicle.create_time.strftime("%d/%m/%Y %H:%M") if current_vehicle.create_time else "",
             "emergency": emergency,
             "auto_manual": auto_manual,
             "retake_available": False,
@@ -639,6 +640,46 @@ def get_current_status(request):
             "status": "error",
             "message": str(e)
         }, status=500)
+
+@csrf_exempt
+def print_current_vehicle(request):
+    """Send print job for the currently active IN_PROGRESS vehicle."""
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+    try:
+        current_vehicle = VEHICLE_LOGS.objects.filter(status="IN_PROGRESS").first()
+        if not current_vehicle:
+            return JsonResponse({"success": False, "error": "No vehicle currently in progress"}, status=404)
+
+        rfid_key   = build_rfid_key(current_vehicle.rfids, current_vehicle.uid)
+        vehicle_obj = VEHICLE_MASTER.objects.filter(rfid=rfid_key).first()
+        vendor_obj  = None
+        if vehicle_obj:
+            vendor_obj = VENDOR_MASTER.objects.filter(vendor_code=vehicle_obj.vendor_code).first()
+
+        vehicle_number = vehicle_obj.vehicle_number if vehicle_obj else current_vehicle.uid
+        vendor_name    = vendor_obj.vendor_name if vendor_obj else ""
+        dtstamp        = current_vehicle.create_time.strftime("%d/%m/%Y %H:%M") if current_vehicle.create_time else ""
+
+        mqtt = MQTT("MANAGER_PRINT")
+        mqtt.publish("manager/printer", {
+            "action":         "send_data",
+            "vehicle_number": vehicle_number,
+            "vendor_name":    vendor_name,
+            "dtstamp":        dtstamp,
+        })
+
+        return JsonResponse({
+            "success":        True,
+            "message":        "Print job sent",
+            "vehicle_number": vehicle_number,
+            "vendor_name":    vendor_name,
+            "dtstamp":        dtstamp,
+        })
+
+    except Exception as e:
+        print(f"[ERROR] print_current_vehicle: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
 
 @csrf_exempt
 def stop_print_job(request):

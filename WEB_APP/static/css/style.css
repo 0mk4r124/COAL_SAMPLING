@@ -292,3 +292,11 @@ body {
     border: 2px solid white;
     box-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
+
+.dashboard-ctrl-btn:disabled {
+    background-color: #6c757d !important;
+    border-color:     #6c757d !important;
+    color:            #ccc    !important;
+    opacity: 0.65;
+    cursor: not-allowed;
+}

@@ -15,14 +15,10 @@ urlpatterns = [
     path('get_current_status/', get_current_status, name='get_current_status'),
     path('reset_system/', reset_system, name='reset_system'),
     path('send_print_data/', send_print_data, name='send_print_data'),
+    path('print_current_vehicle/', print_current_vehicle, name='print_current_vehicle'),
     path('stop_print_job/', stop_print_job, name='stop_print_job'),
     path('retake_failed_cycle/', retake_failed_cycle, name='retake_failed_cycle'),
 
     path('health_status/', health_status, name='health_status'),
-    
-    # New endpoints for state and emergency management
-    path('get_current_status/', get_current_status, name='get_current_status'),
-    path('reset_system/', reset_system, name='reset_system'),
-    
     path('live-ip-camera', live_ip_camera, name='live-ip-camera'),
 ]
