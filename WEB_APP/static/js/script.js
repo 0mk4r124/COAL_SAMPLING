@@ -15,9 +15,8 @@ let autoManualModalOpen = false;
 let statusCheckInterval = null;
 
 // Print job state
-let pendingPrintRow     = null;
-let printCountdownTimer = null;
-let printModalInstance  = null;
+let pendingPrintRow    = null;
+let printModalInstance = null;
 
 const img = document.getElementById("modalImage");
 const wrapper = document.getElementById("zoomWrapper");
@@ -198,7 +197,8 @@ function updateCurrentStatus() {
                 window._currentVehicleData = isInProgress ? {
                     vehicle_number: data.vehicle_number,
                     vendor_name:    data.vendor_name,
-                    datetimestamp:  data.datetimestamp || ''
+                    uid:  currentUID,
+                    datetimestamp:  currentUID,
                 } : null;
             }
 
@@ -324,14 +324,9 @@ function sendPrintData(row) {
     pendingPrintRow = row;
 
     // Reset modal to initial state
-    const footer    = document.getElementById('printModalFooter');
-    const countdown = document.getElementById('printCountdownSection');
-    const btn       = document.getElementById('confirmPrintBtn');
-
-    footer.style.display    = '';
-    countdown.style.display = 'none';
-    btn.disabled            = false;
-    btn.innerHTML           = '<i class="fas fa-print"></i> Send Print';
+    const btn = document.getElementById('confirmPrintBtn');
+    btn.disabled  = false;
+    btn.innerHTML = '<i class="fas fa-print"></i> Send Print';
 
     document.getElementById('printConfirmText').innerHTML =
         `Send print job for: <strong>${row.vehicle_number}</strong> &mdash; ${row.vendor_name}<br>
@@ -349,8 +344,8 @@ function sendPrintData(row) {
 function confirmSendPrint() {
     if (!pendingPrintRow) return;
 
-    const row      = pendingPrintRow;
-    const btn      = document.getElementById('confirmPrintBtn');
+    const row       = pendingPrintRow;
+    const btn       = document.getElementById('confirmPrintBtn');
     const isCurrent = row._source === 'current';
 
     btn.disabled  = true;
@@ -359,7 +354,7 @@ function confirmSendPrint() {
     const endpoint = isCurrent ? '/api/print_current_vehicle/' : '/api/send_print_data/';
     const body     = isCurrent
         ? {}
-        : { vehicle_number: row.vehicle_number, vendor_name: row.vendor_name, dtstamp: row.datetimestamp };
+        : { vehicle_number: row.vehicle_number, vendor_name: row.vendor_name, dtstamp: row.uid };
 
     fetch(endpoint, {
         method: 'POST',
@@ -369,9 +364,7 @@ function confirmSendPrint() {
     .then(r => r.json())
     .then(res => {
         if (res.success) {
-            document.getElementById('printModalFooter').style.display = 'none';
-            document.getElementById('printCountdownSection').style.display = '';
-            startPrintCountdown(120);
+            if (printModalInstance) printModalInstance.hide();
         } else {
             btn.disabled  = false;
             btn.innerHTML = '<i class="fas fa-print"></i> Send Print';
@@ -386,39 +379,6 @@ function confirmSendPrint() {
     });
 }
 
-function startPrintCountdown(seconds) {
-    let remaining = seconds;
-    document.getElementById('printCountdownDisplay').textContent = remaining;
-    clearInterval(printCountdownTimer);
-    printCountdownTimer = setInterval(() => {
-        remaining--;
-        document.getElementById('printCountdownDisplay').textContent = remaining;
-        if (remaining <= 0) {
-            clearInterval(printCountdownTimer);
-            sendStopPrint();
-        }
-    }, 1000);
-}
-
-function stopPrintEarly() {
-    clearInterval(printCountdownTimer);
-    sendStopPrint();
-}
-
-function sendStopPrint() {
-    fetch('/api/stop_print_job/', {
-        method: 'POST',
-        headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-    })
-    .then(r => r.json())
-    .then(() => { if (printModalInstance) printModalInstance.hide(); })
-    .catch(err => {
-        console.error(err);
-        if (printModalInstance) printModalInstance.hide();
-    });
-}
-
 function printCurrentVehicle() {
     const d = window._currentVehicleData;
     if (!d) {
@@ -430,18 +390,14 @@ function printCurrentVehicle() {
     pendingPrintRow = {
         vehicle_number: d.vehicle_number,
         vendor_name:    d.vendor_name,
-        datetimestamp:  d.datetimestamp,
+        datetimestamp:  d.uid,
+        uid:  d.uid,
         _source:        'current'   // flag so confirmSendPrint hits the right endpoint
     };
 
-    const footer    = document.getElementById('printModalFooter');
-    const countdown = document.getElementById('printCountdownSection');
-    const btn       = document.getElementById('confirmPrintBtn');
-
-    footer.style.display    = '';
-    countdown.style.display = 'none';
-    btn.disabled            = false;
-    btn.innerHTML           = '<i class="fas fa-print"></i> Send Print';
+    const btn = document.getElementById('confirmPrintBtn');
+    btn.disabled  = false;
+    btn.innerHTML = '<i class="fas fa-print"></i> Send Print';
 
     document.getElementById('printConfirmText').innerHTML =
         `Print current vehicle: <strong>${d.vehicle_number}</strong> &mdash; ${d.vendor_name}<br>

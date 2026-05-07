@@ -150,12 +150,15 @@ class PrintSession:
 # ──────────────────────────────────────────────────────────────────────────────
 # PrinterService
 #   Owns the single, persistent MQTT subscription.
+#   Non-blocking event loop — processes one message per iteration, then checks
+#   the session timeout on every pass.
+#
 #   Lifecycle per job:
-#     1. Wait (forever) for a "send_data" message.
-#     2. Create a PrintSession and call send_data().
-#     3. Wait up to STOP_TIMEOUT_SEC for a "stop" message.
-#     4. Whether stop arrives or timeout fires → call session.stop(), del session.
-#     5. Go back to step 1.
+#     1. Wait for a "send_data" message.
+#     2. If a session is already active → stop it first (replace with new data).
+#     3. Create a PrintSession and call send_data().
+#     4. Keep looping; on each pass check for "stop" message or 15-min timeout.
+#     5. On stop/timeout → call session.stop(), del session → back to step 1.
 # ──────────────────────────────────────────────────────────────────────────────
 
 class PrinterService:
@@ -171,81 +174,94 @@ class PrinterService:
     def _pop(self) -> dict | None:
         return self.mqtt.pop(TOPIC_IN)
 
-    def _wait_for_stop(self) -> bool:
-        """
-        Poll MQTT for up to STOP_TIMEOUT_SEC.
-        Returns True  if an explicit 'stop' message arrived.
-        Returns False if the timeout fired.
-        """
-        deadline = time.time() + STOP_TIMEOUT_SEC
-        while time.time() < deadline:
-            msg = self._pop()
-            if msg:
-                action = msg.get("action", "")
-                if action == "stop":
-                    print("[PRINTER] Explicit stop received.")
-                    logger.info("Explicit stop received.")
-                    return True
-                # Any other message while waiting (e.g. duplicate send_data) → ignore / log
-                print(f"[PRINTER] Ignored message while session active: action={action}")
-                logger.warning(f"Ignored mid-session message: {msg}")
-            time.sleep(0.05)
-
-        remaining = STOP_TIMEOUT_SEC // 60
-        print(f"[PRINTER] No stop received within {remaining} min — auto-stopping.")
-        logger.warning(f"Auto-stop triggered after {remaining} min timeout.")
-        return False
-
     # ───────────────────────── main loop ─────────────────────────────────── #
 
     def run(self):
         print("[PRINTER] Ready — waiting for 'send_data' command.")
 
+        session: PrintSession | None = None
+
         while True:
-            # ── Phase 1: idle — wait for send_data ───────────────────────── #
+            # ── process one MQTT message if available ─────────────────────── #
             msg = self._pop()
 
-            if not msg:
-                time.sleep(0.05)
-                continue
+            if msg:
+                action = msg.get("action", "")
 
-            action = msg.get("action", "")
+                if action == "stop":
+                    if session:
+                        print("[PRINTER] Stop command received — stopping active session.")
+                        logger.info("Explicit stop received, tearing down session.")
+                        try:
+                            session.stop()
+                        except Exception as e:
+                            print(f"[PRINTER] Error stopping session: {e}")
+                            logger.error(f"Error stopping session: {e}", exc_info=True)
+                        finally:
+                            del session
+                            session = None
+                        print("[PRINTER] Session closed — waiting for next job.")
+                        logger.info("Session closed, back to idle.")
+                    else:
+                        print("[PRINTER] Stop received but no active session — ignoring.")
 
-            if action != "send_data":
-                print(f"[PRINTER] Ignored '{action}' — no active session.")
-                logger.info(f"Dropped message with action='{action}' (idle, no session).")
-                continue
+                elif action == "send_data":
+                    # Stop the old session first if one is running
+                    if session:
+                        print("[PRINTER] New send_data received — stopping previous session first.")
+                        logger.info("New send_data while session active — stopping old session.")
+                        try:
+                            session.stop()
+                        except Exception as e:
+                            print(f"[PRINTER] Error stopping old session: {e}")
+                            logger.error(f"Error stopping old session: {e}", exc_info=True)
+                        finally:
+                            del session
+                            session = None
 
-            # ── Phase 2: initialise session and send data ─────────────────── #
-            session = PrintSession(IP, PORT)
-            try:
-                session.send_data(
-                    msg.get("vendor_name",    ""),
-                    msg.get("vehicle_number", ""),
-                    msg.get("dtstamp",        "")
-                )
-            except Exception as e:
-                print(f"[PRINTER] send_data failed: {e}")
-                logger.error(f"send_data failed: {e}", exc_info=True)
-                session.stop()
-                del session
-                print("[PRINTER] Session torn down after send_data error — waiting for next job.")
-                continue
+                    # Start fresh session
+                    session = PrintSession(IP, PORT)
+                    try:
+                        session.send_data(
+                            msg.get("vendor_name",    ""),
+                            msg.get("vehicle_number", ""),
+                            msg.get("dtstamp",        "")
+                        )
+                        session._started_at = time.time()
+                        print("[PRINTER] Data sent — session active, waiting for stop or timeout.")
+                        logger.info("Data sent successfully. Waiting for stop/timeout.")
+                    except Exception as e:
+                        print(f"[PRINTER] send_data failed: {e}")
+                        logger.error(f"send_data failed: {e}", exc_info=True)
+                        try:
+                            session.stop()
+                        except Exception:
+                            pass
+                        finally:
+                            del session
+                            session = None
 
-            # ── Phase 3: wait for stop (or timeout) ──────────────────────── #
-            try:
-                _was_explicit = self._wait_for_stop()
-            finally:
-                # Phase 4: always stop & destroy the session
-                try:
-                    session.stop()
-                except Exception as e:
-                    print(f"[PRINTER] Error during session stop: {e}")
-                    logger.error(f"Error during session stop: {e}", exc_info=True)
-                del session
+                else:
+                    print(f"[PRINTER] Unknown action '{action}' — ignoring.")
+                    logger.warning(f"Unknown action: {action}")
 
-            print("[PRINTER] Session closed — waiting for next job.")
-            logger.info("Session closed, back to idle.")
+            # ── timeout check: runs every loop pass ───────────────────────── #
+            if session and hasattr(session, '_started_at'):
+                if time.time() - session._started_at >= STOP_TIMEOUT_SEC:
+                    print(f"[PRINTER] Session timeout ({STOP_TIMEOUT_SEC // 60} min) — auto-stopping.")
+                    logger.warning(f"Auto-stop triggered after {STOP_TIMEOUT_SEC // 60} min timeout.")
+                    try:
+                        session.stop()
+                    except Exception as e:
+                        print(f"[PRINTER] Error during auto-stop: {e}")
+                        logger.error(f"Error during auto-stop: {e}", exc_info=True)
+                    finally:
+                        del session
+                        session = None
+                    print("[PRINTER] Session auto-closed — waiting for next job.")
+                    logger.info("Session auto-closed, back to idle.")
+
+            time.sleep(0.05)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

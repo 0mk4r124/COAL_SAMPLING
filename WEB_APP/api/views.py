@@ -16,7 +16,7 @@ from django.contrib import messages
 
 from api.models import *
 from accounts.decorators import password_expiry_required
-from DEPENDANT.MQTT import MQTT
+from accounts.MQTT import MQTT
 from datetime import datetime
 from urllib.parse import unquote, urlparse
 
