@@ -63,7 +63,7 @@ def parse_last_ping(value):
     except ValueError:
         return None
     
-@method_decorator([login_required, password_expiry_required], name='dispatch')
+@method_decorator([login_required], name='dispatch') # password_expiry_required
 class APIDashboardView(TemplateView):
     template_name = 'dashboards/api_dashboard.html'
 

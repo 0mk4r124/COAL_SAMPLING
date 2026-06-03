@@ -41,7 +41,7 @@ class CustomLogoutView(View):
         messages.success(self.request, "You have been logged out.")
         return redirect(self.redirect_url)
 
-@method_decorator([login_required, password_expiry_required], name='dispatch')
+@method_decorator([login_required], name='dispatch') # password_expiry_required
 class DashboardView(LoginRequiredMixin, TemplateView):
     def get_template_names(self):
         user = self.request.user
