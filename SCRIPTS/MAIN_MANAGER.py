@@ -12,6 +12,8 @@ from fpdf import FPDF
 
 from DEPENDANT.MQTT import MQTT
 from DEPENDANT.LOGGING import initializeLogger
+from DEPENDANT.EMAIL_ALERTS import send_new_vehicle_alert
+from DEPENDANT.VEHICLE_HOOKS import on_new_vehicle, resolve_pdf_url
 
 from LOGIC import (
     initialize_ai_model,
@@ -269,6 +271,7 @@ def db_find_vehicle(rfids: str, uid: str) -> dict | None:
                 vm.RFID,
                 vm.VEHICLE_NUMBER,
                 vm.VENDOR_CODE,
+                vm.PDF_URL,
                 vr.VENDER_NAME
             FROM VEHICLE_MASTER vm
             LEFT JOIN VENDOR_MASTER vr 
@@ -528,6 +531,7 @@ class Manager:
 
         self._state_entered_at: float = time.time()
         self._db_last_polled  : float = 0.0
+        self._new_vehicle_mail_sent = False
         
         # AI Model initialization
         if initialize_ai_model():
@@ -819,10 +823,19 @@ class Manager:
             print("[MANAGER] RFID not in DB — will poll ")
             logger.info("RFID not in DB — will poll ")
             db_create_log(self.uid, self.rfids, str(self.bucket_no), self.paths)
+            on_new_vehicle(self.uid, self.rfids)      # mail alert (deduped, threaded)
             self._db_last_polled = time.time()
             self._goto(State.WAITING_FOR_DB)
 
     def _handle_waiting_for_db(self):
+
+        if not self._new_vehicle_mail_sent:
+            threading.Thread(
+                target=send_new_vehicle_alert,
+                args=(self.uid, self.rfids),
+                daemon=True,
+            ).start()
+            self._new_vehicle_mail_sent = True
 
         if self._elapsed() > DB_WAIT_TIMEOUT:
             print("[MANAGER] DB wait timed out — resetting.")
@@ -958,12 +971,18 @@ class Manager:
         self._barrier(action="close_barrier")
         time.sleep(2)
 
-        # Sending data to printer with vendor and vehicle info for label printing
-        vendor_name = self.vehicle.get("VENDER_NAME", "UNKNOWN")
-        vehicle_number = self.vehicle.get("VEHICLE_NUMBER", "UNKNOWN")
-        self._printer(action="send_data", vendor_name=vendor_name.replace(" ", "").upper(), vehicle_number=vehicle_number.replace(" ", "").upper(), dtstamp=self.uid.replace('_', ''))
-        print(f"[MANAGER] Data Sent — {vendor_name.replace(' ', '').upper()} - {vehicle_number.replace(' ', '').upper()} - {self.uid.replace('_', '')}")
-        logger.info(f"Data Sent — {vendor_name.replace(' ', '').upper()} - {vehicle_number.replace(' ', '').upper()} - {self.uid.replace('_', '')}")
+        # Privacy-safe print job: QR carries only dtstamp + secured PDF link.
+        # resolve_pdf_url handles: existing PDF / vendor-mismatch (mail + reuse
+        # old PDF) / brand-new vehicle (creates + uploads PDF on the spot).
+        pdf_url = resolve_pdf_url(
+            self.vehicle,
+            self.uid,
+            vehicle_img_path=self.paths.get("VEHICLE_IMG_PATH"),
+        )
+        dtstamp = self.uid.replace('_', '')
+        self._printer(action="send_data", pdf_url=pdf_url, dtstamp=dtstamp)
+        print(f"[MANAGER] Print job sent — dtstamp={dtstamp} url={'yes' if pdf_url else 'MISSING'}")
+        logger.info(f"Print job sent — dtstamp={dtstamp} pdf_url={pdf_url}")
         
         self._goto(State.BARRIER_CLOSING)
 
@@ -1247,6 +1266,7 @@ class Manager:
         self.bucket_no = 1
         self._current_sample_index = 0
         self._successful_cycles = 0
+        self._new_vehicle_mail_sent = False
         self._goto(State.IDLE)
         print("[MANAGER] Ready for next vehicle")
 

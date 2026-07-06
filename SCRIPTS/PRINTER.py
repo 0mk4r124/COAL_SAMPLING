@@ -113,7 +113,7 @@ class PrintSession:
 
     # ───────────────────────── PUBLIC API ────────────────────────────────── #
 
-    def send_data(self, vendor_name: str, vehicle_number: str, dtstamp: str):
+    def send_data(self, pdf_url: str, dtstamp: str):
         """Connect, send START, wait 10 s, then push the data frame."""
         self.connect()
         self._send(self._build_packet("A55A02050100", self._start_json()), "START")
@@ -121,7 +121,7 @@ class PrintSession:
         self._send(
             self._build_packet(
                 "A55A01100100",
-                self._data_json(vendor_name, vehicle_number, dtstamp)
+                self._data_json(pdf_url, dtstamp)
             ),
             "DATA"
         )
