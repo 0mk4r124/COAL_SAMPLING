@@ -305,7 +305,7 @@ def download_history_data(request):
 
         # ---- SAME QUERY AS fetch_history_data ----
         vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
-            rfid=OuterRef('rfids')
+            rfids=OuterRef('rfids')
         )
 
         vendor_master_qs = VENDOR_MASTER.objects.filter(
