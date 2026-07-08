@@ -44,7 +44,7 @@ _ALERT_LOCK = threading.Lock()
 # NEW VEHICLE ALERT
 # =====================================================================
 
-def on_new_vehicle(uid: str, rfids) -> None:
+def on_new_vehicle(uid: str, vn: str, rfids: list[str]) -> None:
     """Fire-and-forget mail. Safe to call repeatedly (polling loop)."""
     with _ALERT_LOCK:
         if uid in _new_vehicle_alerted_uids:
@@ -56,7 +56,7 @@ def on_new_vehicle(uid: str, rfids) -> None:
             _new_vehicle_alerted_uids.add(uid)
 
     threading.Thread(
-        target=send_new_vehicle_alert, args=(uid, rfids), daemon=True
+        target=send_new_vehicle_alert, args=(uid, vn, rfids), daemon=True
     ).start()
     logger.info(f"[HOOKS] New-vehicle alert queued for UID {uid}")
 

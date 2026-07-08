@@ -304,8 +304,8 @@ def download_history_data(request):
             return JsonResponse({'error': 'Invalid date format'}, status=400)
 
         # ---- SAME QUERY AS fetch_history_data ----
-        vehicle_master_qs = VEHICLE_MASTER.objects.annotate(
-            rfids=OuterRef('rfids')
+        vehicle_master_qs = VEHICLE_MASTER.objects.filter(
+            rfid=OuterRef('rfids')
         )
 
         vendor_master_qs = VENDOR_MASTER.objects.filter(

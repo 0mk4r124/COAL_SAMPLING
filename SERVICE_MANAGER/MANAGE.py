@@ -12,9 +12,8 @@ from PyQt5.QtCore import QProcess, QTimer, QProcessEnvironment
 from PyQt5.QtGui import QFont
 
 from tendo import singleton
+from dotenv import load_dotenv
 from DEPENDANT.MQTT import MQTT
-
-me = singleton.SingleInstance()
 
 BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
 SERVICES = {
@@ -27,15 +26,46 @@ SERVICES = {
     "Sampler PLC": fr"{BASE_FILE_PATH}SCRIPTS\\PLC_SAMPLER.py",
     "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
     "Health Monitor": fr"{BASE_FILE_PATH}SCRIPTS\\HEALTH_STATUS.py",
+    "PDF Sync": fr"{BASE_FILE_PATH}SCRIPTS\\FILL_VEHICLES.py",
     # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
     "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
 }
+
+me = singleton.SingleInstance()
+load_dotenv(BASE_FILE_PATH / ".env")
+
 PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different
 
 BARRIER_TOPIC_IN  = "manager/plc_barrier"
 BARRIER_TOPIC_OUT = "plc_barrier/status"
+
+# ── App / Azure / DB configuration passed to every service ────────────────────
+SERVICE_ENV = {
+    # Azure
+    "AZURE_TENANT_ID": os.getenv("AZURE_TENANT_ID"),
+    "AZURE_CLIENT_ID": os.getenv("AZURE_CLIENT_ID"),
+    "AZURE_CLIENT_SECRET": os.getenv("AZURE_CLIENT_SECRET"),
+    "AZURE_SENDER_EMAIL": os.getenv("AZURE_SENDER_EMAIL"),
+    "AZURE_BLOB_CONNECTION_STRING": os.getenv("AZURE_BLOB_CONNECTION_STRING"),
+    "AZURE_BLOB_CONTAINER": os.getenv("AZURE_BLOB_CONTAINER"),
+
+    # Application
+    "VEHICLE_PDF_PASSWORD": os.getenv("VEHICLE_PDF_PASSWORD"),
+    "ALERT_RECIPIENTS": os.getenv("ALERT_RECIPIENTS"),
+
+    # Database
+    "DB_HOST": os.getenv("DB_HOST"),
+    "DB_USER": os.getenv("DB_USER"),
+    "DB_PASSWORD": os.getenv("DB_PASSWORD"),
+    "DB_NAME": os.getenv("DB_NAME"),
+
+    # Scheduler
+    "DAILY_REPORT_TIME": os.getenv("DAILY_REPORT_TIME", "08:00"),
+    "WEEKLY_SYNC_DAY": os.getenv("WEEKLY_SYNC_DAY", "monday"),
+    "WEEKLY_SYNC_TIME": os.getenv("WEEKLY_SYNC_TIME", "06:00"),
+}
 
 # BASE_FILE_PATH = "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/"
 # SERVICES = {
@@ -174,6 +204,9 @@ class ServiceTab(QWidget):
 
         # Optional but recommended for matplotlib stability
         env.insert("MPLCONFIGDIR", r"C:\temp\matplotlib")
+
+        for key, value in SERVICE_ENV.items():
+            env.insert(key, value)
 
         self.process.setProcessEnvironment(env)
 

@@ -12,7 +12,7 @@ from fpdf import FPDF
 
 from DEPENDANT.MQTT import MQTT
 from DEPENDANT.LOGGING import initializeLogger
-from DEPENDANT.EMAIL_ALERTS import send_new_vehicle_alert
+# from DEPENDANT.EMAIL_ALERTS import send_new_vehicle_alert
 from DEPENDANT.VEHICLE_HOOKS import on_new_vehicle, resolve_pdf_url
 
 from LOGIC import (
@@ -823,19 +823,10 @@ class Manager:
             print("[MANAGER] RFID not in DB — will poll ")
             logger.info("RFID not in DB — will poll ")
             db_create_log(self.uid, self.rfids, str(self.bucket_no), self.paths)
-            on_new_vehicle(self.uid, self.rfids)      # mail alert (deduped, threaded)
             self._db_last_polled = time.time()
             self._goto(State.WAITING_FOR_DB)
 
     def _handle_waiting_for_db(self):
-
-        if not self._new_vehicle_mail_sent:
-            threading.Thread(
-                target=send_new_vehicle_alert,
-                args=(self.uid, self.rfids),
-                daemon=True,
-            ).start()
-            self._new_vehicle_mail_sent = True
 
         if self._elapsed() > DB_WAIT_TIMEOUT:
             print("[MANAGER] DB wait timed out — resetting.")
@@ -870,6 +861,7 @@ class Manager:
             self.vehicle = vehicle
             self._barrier(action="green_signal")
             time.sleep(2)
+            on_new_vehicle(self.uid, self.vehicle.get("VEHICLE_NUMBER"), self.rfids)      # mail alert (deduped, threaded)
             self._goto(State.OPEN_BARRIER)
 
     def _handle_open_barrier(self):

@@ -73,11 +73,11 @@ class PrintSession:
     def _stop_json(self) -> str:
         return '[{"GroupName":"G1","SelectMessage":"VAHICALDATA","ResetMessage":true,"Action":"Stop"}]'
 
-    def _data_json(self, vendor: str, vehicle: str, dt: str) -> str:
-        logger.info(f"Preparing JSON — vendor={vendor}, vehicle={vehicle}, dt={dt}")
+    def _data_json(self, pdf_url: str, dt: str) -> str:
+        logger.info(f"Preparing JSON — dt={dt}, url={pdf_url}")
         return (
             '{"MessageName":"VAHICALDATA","KeyValue":[{'
-            f'"Eth_0":"{vehicle}|{vendor}|{dt}",'
+            f'"Eth_0":"{pdf_url}",'
             f'"Eth_1":"-",'
             f'"Eth_2":"{dt}"'
             '}]}'
@@ -223,9 +223,8 @@ class PrinterService:
                     session = PrintSession(IP, PORT)
                     try:
                         session.send_data(
-                            msg.get("vendor_name",    ""),
-                            msg.get("vehicle_number", ""),
-                            msg.get("dtstamp",        "")
+                            msg.get("pdf_url", ""),
+                            msg.get("dtstamp", "")
                         )
                         session._started_at = time.time()
                         print("[PRINTER] Data sent — session active, waiting for stop or timeout.")

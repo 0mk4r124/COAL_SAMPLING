@@ -32,6 +32,7 @@ class VEHICLE_MASTER(models.Model):
     rfid = models.CharField(db_column='RFID', max_length=500, blank=True, null=True)
     vehicle_number = models.CharField(db_column='VEHICLE_NUMBER', max_length=50, blank=True, null=True)
     vendor_code = models.CharField(db_column='VENDOR_CODE', max_length=50, blank=True, null=True)
+    pdf_url = models.CharField(db_column='PDF_URL', max_length=512, blank=True, null=True)
     
     create_time = models.DateTimeField(db_column='CREATE_TIME', blank=True, null=True)
 

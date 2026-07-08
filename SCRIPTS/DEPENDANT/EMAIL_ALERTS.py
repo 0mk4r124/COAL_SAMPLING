@@ -30,25 +30,23 @@ def _safe_send(subject: str, body: str, attachments: list[str] | None = None) ->
         return False
 
 
-def send_new_vehicle_alert(uid: str, rfids) -> bool:
+def send_new_vehicle_alert(uid: str, vn: str, rfids: list[str]) -> bool:
     """RFID not found in VEHICLE_MASTER - new vehicle arrived."""
     rfid_str = rfids if isinstance(rfids, str) else " | ".join(rfids or [])
     body = (
         "A NEW VEHICLE has arrived at the coal sampling station.\n\n"
         f"Session UID : {uid}\n"
+        f"Vehicle Number : {vn}\n"
         f"RFID(s)     : {rfid_str}\n"
         f"Time        : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n\n"
         "The RFID was not found in VEHICLE_MASTER. The system is waiting for the\n"
         "vehicle to be added via the dashboard (standard procedure). Its secured\n"
         "PDF will be created on the next weekly sync, or run PDF sync manually:\n"
-        "    python SCHEDULED_JOBS.py --sync-now\n"
     )
-    return _safe_send(f"[COAL SAMPLING] New vehicle arrived - UID {uid}", body)
+    return _safe_send(f"[COAL SAMPLING DHAR] New vehicle arrived - UID {uid}", body)
 
 
-def send_vendor_mismatch_alert(vehicle_number: str, existing_vendor: str,
-                               new_vendor: str, uid: str,
-                               image_paths: list[str] | None = None) -> bool:
+def send_vendor_mismatch_alert(vehicle_number: str, existing_vendor: str,new_vendor: str, uid: str, image_paths: list[str] | None = None) -> bool:
     """Same vehicle number, different vendor. Existing PDF/QR is reused."""
     body = (
         "VENDOR MISMATCH detected at the coal sampling station.\n\n"
@@ -62,7 +60,7 @@ def send_vendor_mismatch_alert(vehicle_number: str, existing_vendor: str,
         "VEHICLE_MASTER if required.\n"
     )
     return _safe_send(
-        f"[COAL SAMPLING] Vendor mismatch - {vehicle_number}",
+        f"[COAL SAMPLING DHAR] Vendor mismatch - {vehicle_number}",
         body,
         attachments=image_paths,
     )
