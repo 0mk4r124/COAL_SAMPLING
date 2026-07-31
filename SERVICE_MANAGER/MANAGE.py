@@ -13,6 +13,7 @@ from PyQt5.QtGui import QFont
 
 from tendo import singleton
 from dotenv import load_dotenv
+from pathlib import Path
 from DEPENDANT.MQTT import MQTT
 
 BASE_FILE_PATH = r"c:\\Users\\COAL_SAMPLING_1\\PRODUCTION_CODE\\COAL_SAMPLING\\"
@@ -33,7 +34,9 @@ SERVICES = {
 }
 
 me = singleton.SingleInstance()
-load_dotenv(BASE_FILE_PATH / ".env")
+
+BASE_PATH = Path(BASE_FILE_PATH)
+load_dotenv(BASE_PATH / ".env")
 
 PYTHON_EXE = r"c:\Users\COAL_SAMPLING_1\miniconda3\envs\detectron2_cpu\python.exe"
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"  # Adjust if different

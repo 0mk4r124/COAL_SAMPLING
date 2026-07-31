@@ -5,6 +5,7 @@ import traceback
 import tempfile
 import uuid
 import subprocess
+import time
 
 from datetime import datetime
 from fpdf import FPDF
@@ -28,6 +29,115 @@ RIGHT_LOGO_PATH = BASE_FILE_PATH + "/WEB_APP/static/logo/insightzz_logo.png"
 logger = initializeLogger("LOGIC_MANAGER", LOGS_PATH=LOGS_PATH)
 
 _inference_model = None
+
+THRESHOLD_RATIO = 2 / 3
+
+# Model is loaded once and reused (loading MASKRCNN repeatedly is expensive)
+_model = None
+
+
+def _get_model():
+    _model = MASKRCNN(
+        tag="coco",
+        CONFIG_PATH="",
+        mask_model_path="",
+        model_file="",
+        thr_acc=0.5,
+        class_json=None,
+        debugMode=False,
+        GPU_ID=0,
+        use_pretrained=True,
+    )
+    return _model
+
+
+def is_truck_below_line(img=None, image_path=None, threshold_ratio=THRESHOLD_RATIO, thr_acc=0.5):
+    """
+    Returns True if a truck's bottom edge (y2) is below the 2/3 line.
+    Pass either an image array (img) OR an image_path.
+    """
+    if img is None:
+        if image_path is None:
+            raise ValueError("Provide either img or image_path")
+        img = cv2.imread(image_path)
+    if img is None:                       # unreadable / missing frame
+        return False
+
+    img_height = img.shape[0]
+    threshold_y = int(img_height * threshold_ratio)
+
+    model = _get_model()
+    output = model.predictor(img)
+    instances = output["instances"].to("cpu")
+    boxes = instances.pred_boxes.tensor.numpy().astype(int)
+    classes = instances.pred_classes.numpy()
+    scores = instances.scores.numpy()
+    COCO_CLASSES = model.class_list
+
+    for box, cls, score in zip(boxes, classes, scores):
+        label = COCO_CLASSES[cls]
+        if label != "truck" or score < thr_acc:
+            continue
+
+        x1, y1, x2, y2 = box
+        crossed = y2 > threshold_y
+
+        # green if above the line, magenta if bottom crossed below 2/3
+        color = (255, 0, 255) if crossed else (0, 255, 0)
+
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(
+            img,
+            f"{label} {score:.2f}",
+            (x1, y1 - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2
+        )
+
+        if label == "truck" and crossed:
+            cv2.putText(
+                img,
+                "TRUCK BOTTOM BELOW 2/3",
+                (x1, y2 + 25),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
+                2
+            )
+            print(f"Truck bottom crossed 2/3 line -> y2={y2}, threshold={threshold_y}")
+
+            cv2.imwrite(str(image_path).split(".")[0]+"_mask.jpg", img)
+            # bottom is below the 2/3 line
+            return True
+    return False
+
+
+def confirm_truck_present(get_frame, checks=5, required=None, delay=0.3):
+    """
+    Runs the truck check `checks` times to confirm a stable presence.
+
+    get_frame : callable returning a fresh image each call (or None).
+    checks    : how many times to check (default 5).
+    required  : how many must be positive to confirm (default = all `checks`).
+    delay     : seconds to wait between checks.
+
+    Returns True only if the truck is confirmed present below the line.
+    """
+    if required is None:
+        required = checks
+
+    positive = 0
+    for i in range(checks):
+        frame = get_frame()
+        if is_truck_below_line(img=frame):
+            positive += 1
+        print(f"[truck-check {i+1}/{checks}] positive so far: {positive}")
+        if i < checks - 1:
+            time.sleep(delay)
+
+    return positive >= required
 
 def initialize_ai_model():
     global _inference_model

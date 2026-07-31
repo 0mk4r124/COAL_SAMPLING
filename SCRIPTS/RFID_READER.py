@@ -7,6 +7,7 @@ from datetime import datetime
 
 from DEPENDANT.MQTT import MQTT
 from DEPENDANT.LOGGING import initializeLogger
+from LOGIC import is_truck_below_line
 
 BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 LOGS_PATH = BASE_FILE_PATH + "LOGS/"
@@ -22,6 +23,7 @@ TOPIC_OUT = "rfid/status"
 TOPIC_IN = "manager/rfid"
 
 ig_rfids = ["C80700000000000001F8"]
+image_path = os.path.join(BASE_FILE_PATH, "TEMP_IMG", "CAM2_REDUCED.jpg")
 
 def main():
     mq = MQTT("RFID_READER")
@@ -64,7 +66,7 @@ def main():
                     if len(rfid)<30 and rfid not in ig_rfids:
 
                         logger.debug(f"Tag raw={raw}  decoded={rfid!r}")
-
+                        # if is_truck_below_line(image_path=image_path):
                         if not session_active:
                             session_uid   = datetime.now().strftime("%Y%m%d%H%M%S")
                             last_seen = time.time()
@@ -76,6 +78,10 @@ def main():
                         if rfid not in rfids:
                             last_seen = time.time() 
                             rfids.add(rfid)
+                        # else:
+                        #     print(f"[RFID] Session rejected: No truck present !")
+                        #     logger.info(f"Session rejected: No truck present !")
+
                 elif data and not reading_enabled:
                     # Buffer clear mode — silently discard incoming tags
                     pass

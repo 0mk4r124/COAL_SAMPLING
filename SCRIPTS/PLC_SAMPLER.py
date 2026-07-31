@@ -522,8 +522,8 @@ class SamplerController:
             time.sleep(0.5)
 
 def main():
-    total_x = 74
-    total_y = 30
+    total_x = 37
+    total_y = 15
 
     while True:
         controller = SamplerController(total_x, total_y)
