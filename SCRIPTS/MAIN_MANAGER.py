@@ -35,7 +35,7 @@ TOTAL_CYCLES    = 3
 HOME_POSITION_TIMEOUT = 200 # Wait up to x seconds for auger to return to home position before aborting
 SAMPLE_CYCLE_TIMEOUT = 600
 POSITION_CONFIRMATION_TIMEOUT = 300
-CLOSE_CYCLE_WAIT_TIME = 50 # Wait time after close cycle command before checking for completion - allows PLC to process command and start movement
+CLOSE_CYCLE_WAIT_TIME = 60*2 # Wait 2 minutes after all 3 cycles complete before writing cycle stop
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 MOVEMENT_DURATION = 2 # Duration to move in each direction during auger position confirmation loops (in seconds)
 
@@ -542,6 +542,9 @@ class Manager:
         # Sampling position index tracker
         self._current_sample_index = 0
         self._successful_cycles = 0
+        # Force the next positioning move to go via HOME (used for cycle 1 and
+        # after errors/timeouts so the auger recovers from a known reference)
+        self._force_home_next = True
         
         # Auger position confirmation tracking
         self._confirmation_loop_count = 0
@@ -557,6 +560,8 @@ class Manager:
         )
         self._watchdog_thread.start()
         print("[MANAGER] Manual watchdog thread started.")
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _pop(self, topic: str) -> dict | None:
         return self.mqtt.pop(topic)
@@ -927,7 +932,6 @@ class Manager:
         
         if msg.get("status") == "truck_present":
             print("[MANAGER] Truck placement confirmed.")
-
             # Check for AUTO/MANUAL signal
             self._sampler(action="auto_manual")
             time.sleep(3)
@@ -951,6 +955,12 @@ class Manager:
 
         self._barrier(action="check_truck")
         time.sleep(3)
+
+    def _handle_red_signal(self):
+        # (kept for completeness — red signal is normally sent inline)
+        self._barrier(action="red_signal")
+        time.sleep(2)
+        self._goto(State.CLOSE_BARRIER)
 
     def _handle_close_barrier(self):
         msg = self._pop("plc_barrier/status")
@@ -1008,6 +1018,7 @@ class Manager:
             print("[MANAGER] Auger at home position.")
             self._current_sample_index = 0
             self._successful_cycles = 0
+            self._force_home_next = False   # Auger is at home — cycle 1 position can be absolute
             self._goto(State.CYCLE_POSITION)
         
         if self._elapsed() > HOME_POSITION_TIMEOUT:
@@ -1036,10 +1047,17 @@ class Manager:
             self.positions.append(target_area)
 
         pos = self.positions[self._current_sample_index]
-        self._sampler(action="sample_cycle", x=pos["x"], y=pos["y"])
+
+        # NEW PROCESS: cycles 2 & 3 travel DIRECTLY from the previous position
+        # (no homing in between). Cycle 1 — or any retry after an error /
+        # timeout — goes via home so the auger starts from a known reference.
+        direct = (self._successful_cycles > 0) and (not self._force_home_next)
+        self._force_home_next = False
+
+        self._sampler(action="sample_cycle", x=pos["x"], y=pos["y"], direct=direct)
         print(f"[MANAGER] Sampling positions: {self.positions}")
-        print(f"[MANAGER] Moving to sampling position: {pos}")
-        logger.debug(f"Moving to sampling position: {pos}")
+        print(f"[MANAGER] Moving to sampling position: {pos} (direct={direct})")
+        logger.debug(f"Moving to sampling position: {pos} (direct={direct})")
         self._goto(State.CYCLE_CONFIRM)
 
     def _handle_cycle_confirm(self):
@@ -1075,6 +1093,7 @@ class Manager:
             logger.debug("Position confirmation timeout — starting cycle")
             print("[MANAGER] Retrying with different position ")
             self.positions.pop()
+            self._force_home_next = True   # Recover via home — position not trusted
             time.sleep(2)
             self._goto(State.CYCLE_POSITION)
 
@@ -1110,8 +1129,9 @@ class Manager:
         
         if msg and msg.get("status", "") == "sample_cycle_complete":
             
-            print(f"[MANAGER] Cycle {self.cycle} completed")
-            logger.debug(f"Cycle {self.cycle} completed")
+            # Completion is detected on the sampler side via Z_UP FB 1 -> 0 -> 1
+            print(f"[MANAGER] Cycle {self.cycle} completed (Z_UP FB 1->0->1)")
+            logger.debug(f"Cycle {self.cycle} completed (Z_UP FB 1->0->1)")
             self._successful_cycles += 1
             self._current_sample_index += 1
             
@@ -1120,23 +1140,25 @@ class Manager:
                 time.sleep(2)
                 print(f"[MANAGER] All {TOTAL_CYCLES} successful cycles completed.")
                 logger.debug(f"All {TOTAL_CYCLES} successful cycles completed.")
-                self._sampler(action="check_all_samples_status")
-                time.sleep(2)  # Ensure PLC has time to update status
+                # NEW PROCESS: the auger stays at the last position — go straight
+                # to SAMPLE_COLLECTION, which waits 1 minute then writes cycle stop.
                 self._goto(State.SAMPLE_COLLECTION)
             else:
-                print(f"[MANAGER] Moving to next sampling position ")
+                print(f"[MANAGER] Moving DIRECTLY to next sampling position (no homing) ")
                 self._goto(State.CYCLE_POSITION)
         elif msg and msg.get("status", "") == "cycle_error":
             print(f"[MANAGER] Cycle error: {msg.get('msg')}")
             print("[MANAGER] Retrying with different position ")
             self.positions.pop()
+            self._force_home_next = True   # Recover via home — position not trusted
             self._goto(State.CYCLE_POSITION)
         if self._elapsed() > SAMPLE_CYCLE_TIMEOUT:
             print("[MANAGER] Cycle timeout — moving to next position")
             self.positions.pop()
+            self._force_home_next = True   # Recover via home — position not trusted
             self._goto(State.CYCLE_POSITION)
         else:
-            print("[MANAGER] Cycle inrpogress — waiting ")
+            print("[MANAGER] Cycle in progress — waiting ")
             self._sampler(action="check_sample_cycle_complete")
             time.sleep(3)
             
@@ -1155,17 +1177,20 @@ class Manager:
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
-        elif msg and msg.get("status") == "all_samples_collected":
-            now = time.time()
-            while (time.time() - now) < CLOSE_CYCLE_WAIT_TIME:
-                time.sleep(10)
-                print("[MANAGER] Waiting for Cycle Stop.")
 
-            self._sampler(action="sample_cycle_stop")
-            self._goto(State.COMPLETE_FINAL)
-        else:
-            self._sampler(action="check_all_samples_status")
-            time.sleep(2)
+        # NEW PROCESS: all 3 Z-cycles are complete — the old CYCLE_COMPLETE tag
+        # can't be trusted since the auger never homed between cycles.
+        # Wait 1 minute, then write CYCLE_STOP.
+        print(f"[MANAGER] All cycles complete — waiting {CLOSE_CYCLE_WAIT_TIME}s before Cycle Stop.")
+        logger.debug(f"All cycles complete — waiting {CLOSE_CYCLE_WAIT_TIME}s before Cycle Stop.")
+
+        now = time.time()
+        while (time.time() - now) < CLOSE_CYCLE_WAIT_TIME:
+            time.sleep(5)
+            print("[MANAGER] Waiting for Cycle Stop.")
+
+        self._sampler(action="sample_cycle_stop")
+        self._goto(State.COMPLETE_FINAL)
 
     def _handle_cycle_emergency_wait(self):
         print("[MANAGER] Waiting for emergency stop clearance on Sampler PLC ")
@@ -1188,6 +1213,7 @@ class Manager:
             self._successful_cycles = 0
             self._current_sample_index = 0
             self.positions = []
+            self._force_home_next = True   # After emergency, always re-home first
             self._emergency_return_state = None
             self._goto(State.VEHICLE_PLACEMENT)
             return
@@ -1201,6 +1227,12 @@ class Manager:
         else:
             print(f"[MANAGER] Waiting for sample cycle stop confirmation ")
             return
+
+    def _handle_green_signal(self):
+        # (kept for completeness — green signal is normally sent inline)
+        self._barrier(action="green_signal")
+        time.sleep(2)
+        self._goto(State.COMPLETE)
         
     def _handle_complete(self):
         print(f"[MANAGER] Session {self.uid} complete.")
@@ -1258,6 +1290,7 @@ class Manager:
         self.bucket_no = 1
         self._current_sample_index = 0
         self._successful_cycles = 0
+        self._force_home_next = True
         self._new_vehicle_mail_sent = False
         self._goto(State.IDLE)
         print("[MANAGER] Ready for next vehicle")

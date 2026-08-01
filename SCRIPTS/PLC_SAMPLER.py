@@ -53,6 +53,19 @@ class SamplerController:
         self.client = self.plc.createConnection()
         self._emergency_state_last = 1  # Track last emergency state (1=normal, 0=emergency)
 
+        # ── Current auger position, in SECONDS of travel from home ────────────
+        # None = position unknown (after boot / reset / emergency / cycle stop)
+        # 0.0  = at home
+        self.current_x_time: float | None = None
+        self.current_y_time: float | None = None
+
+        # ── Z-UP feedback cycle phase machine ─────────────────────────────────
+        # "idle"      -> no cycle armed
+        # "armed"     -> cycle start given, waiting for Z_UP FB to go DOWN (1 -> 0)
+        # "down_seen" -> Z went down, waiting for Z_UP FB to come back UP (0 -> 1)
+        # "complete"  -> Z came back up -> the sampling cycle is complete
+        self._z_phase = "idle"
+
     def check_auto_manual(self):
         auto_manual = 0
         try:
@@ -65,20 +78,57 @@ class SamplerController:
             raise
 
         return auto_manual
-    
-    def check_sample_cycle_complete(self):
-        sample_cycle_complete = 0
+
+    # ── Z-UP FB cycle tracking ────────────────────────────────────────────────
+
+    def arm_z_cycle(self):
+        """Arm the Z-UP FB watcher. Called right after CYCLE_START is pulsed."""
+        self._z_phase = "armed"
+        print("[PLC_SAMPLER] Z-cycle armed — waiting for Z_UP FB 1 -> 0 -> 1")
+        logger.debug("Z-cycle armed — waiting for Z_UP FB 1 -> 0 -> 1")
+
+    def update_z_cycle(self):
+        """
+        Poll Z_UP_SENSOR_FB and advance the phase machine.
+        Called on every iteration of run() so the DOWN (0) state is never
+        missed between the manager's status polls.
+        """
+        if self._z_phase in ("idle", "complete"):
+            return
+
         try:
-            sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_STATUS)
-            print(f"[PLC_SAMPLER] Cycle Complete status: {sample_cycle_complete}")
-            logger.debug(f"Cycle Complete status: {sample_cycle_complete}")
+            z_up = self.plc.readIntFromPLC(self.client, Z_UP_SENSOR_FB)
+        except Exception as e:
+            print(f"[PLC_SAMPLER] update_z_cycle read error: {e}")
+            logger.error(f"{traceback.format_exc()}")
+            return
+
+        if self._z_phase == "armed" and z_up == 0:
+            self._z_phase = "down_seen"
+            print("[PLC_SAMPLER] Z_UP FB went 1 -> 0 (auger down)")
+            logger.debug("Z_UP FB went 1 -> 0 (auger down)")
+
+        elif self._z_phase == "down_seen" and z_up == 1:
+            self._z_phase = "complete"
+            print("[PLC_SAMPLER] Z_UP FB went 0 -> 1 (auger back up) — cycle COMPLETE")
+            logger.debug("Z_UP FB went 0 -> 1 — cycle COMPLETE")
+
+    def check_sample_cycle_complete(self):
+        """
+        Cycle is complete when the Z-UP FB has gone 1 -> 0 -> 1 since the
+        cycle start was given (instead of the old CYCLE_STATUS tag).
+        """
+        try:
+            self.update_z_cycle()
+            print(f"[PLC_SAMPLER] Z-cycle phase: {self._z_phase}")
+            logger.debug(f"Z-cycle phase: {self._z_phase}")
         except Exception as e:
             print(f"[PLC_SAMPLER] check_sample_cycle_complete error: {e}")
             logger.error(f"{traceback.format_exc()}")
             raise
 
-        return sample_cycle_complete
-    
+        return 1 if self._z_phase == "complete" else 0
+
     def check_all_samples_status(self):
         sample_cycle_complete = 0
         try:
@@ -118,40 +168,40 @@ class SamplerController:
                     print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
                     self.reset()
                     return False
-                
+
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
 
                 time.sleep(0.5)
-                if x_forward == 1: 
+                if x_forward == 1:
                     self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 0)
                     logger.debug("0 - X_AXIS_FORWORD")
                     print(f"[PLC_SAMPLER] X forward is at Home")
                     break
-                else: 
+                else:
                     self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
                     logger.debug("1 - X_AXIS_FORWORD")
 
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
-                
+
             while True:
                 emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
                 if emergency == 0:
                     print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
                     self.reset()
                     return False
-                
+
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
 
                 time.sleep(0.5)
-                if y_right == 1: 
+                if y_right == 1:
                     self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
                     logger.debug("0 - Y_AXIS_RIGHT")
                     print(f"[PLC_SAMPLER] Y right is at Home")
                     break
-                else: 
+                else:
                     self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
                     logger.debug("1 - Y_AXIS_RIGHT")
 
@@ -164,7 +214,7 @@ class SamplerController:
                     print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
                     self.reset()
                     return False
-                
+
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
@@ -173,11 +223,14 @@ class SamplerController:
                 time.sleep(0.5)
                 print(f"[PLC_SAMPLER] Sensor states  x_forward={x_forward}  y_right={y_right}  z_up={z_up}")
                 if (x_forward == 1) and (y_right == 1) and (z_up == 1):
-                    return True 
+                    # Auger confirmed at home — position is now known
+                    self.current_x_time = 0.0
+                    self.current_y_time = 0.0
+                    return True
 
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
                 time.sleep(0.5)
-                    
+
         except Exception as e:
             print(f"[PLC_SAMPLER] Sensor read error: {e}")
             logger.error(f"{traceback.format_exc()}")
@@ -197,7 +250,7 @@ class SamplerController:
 
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_reverse = self.plc.readIntFromPLC(self.client, X_REVERSE_SENSOR_FB)
-                if x_reverse == 0: 
+                if x_reverse == 0:
                     self.plc.writeIntToPLC(self.client, X_AXIS_REVERSE, 1)
                     logger.debug("1 - X_AXIS_REVERSE")
                 else: break
@@ -232,7 +285,7 @@ class SamplerController:
 
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 x_forward = self.plc.readIntFromPLC(self.client, X_FORWORD_SENSOR_FB)
-                if x_forward == 0: 
+                if x_forward == 0:
                     self.plc.writeIntToPLC(self.client, X_AXIS_FORWORD, 1)
                     logger.debug("1 - X_AXIS_FORWORD")
                 else: break
@@ -264,10 +317,10 @@ class SamplerController:
                     print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
                     self.reset()
                     return False
-                
+
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_left = self.plc.readIntFromPLC(self.client, Y_LEFT_SENSOR_FB)
-                if y_left == 0: 
+                if y_left == 0:
                     self.plc.writeIntToPLC(self.client, Y_AXIS_LEFT, 1)
                     logger.debug("1 - Y_AXIS_LEFT")
                 else: break
@@ -299,10 +352,10 @@ class SamplerController:
                     print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
                     self.reset()
                     return False
-                
+
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 y_right = self.plc.readIntFromPLC(self.client, Y_RIGHT_SENSOR_FB)
-                if y_right == 0: 
+                if y_right == 0:
                     self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 1)
                     logger.debug("1 - Y_AXIS_RIGHT")
                 else: break
@@ -322,6 +375,58 @@ class SamplerController:
             logger.error(f"{traceback.format_exc()}")
             self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
             raise
+
+    # ── Positioning (absolute via home / relative from current position) ─────
+
+    def move_to_position(self, x_pct, y_pct, direct=False):
+        """
+        Move the auger to (x_pct, y_pct) — percentages of full travel.
+
+        direct=False (or position unknown): go HOME first, then absolute move
+                                            (old behaviour — used for cycle 1).
+        direct=True  and position known:    move RELATIVE from the current
+                                            position WITHOUT homing
+                                            (new behaviour — cycles 2 & 3).
+
+        Sign convention (seconds of travel measured from home):
+            +dX -> move_x_reverse   |  -dX -> move_x_forward
+            +dY -> move_y_left      |  -dY -> move_y_right
+        """
+        target_x = (x_pct * self.total_x) / 100.0
+        target_y = (y_pct * self.total_y) / 100.0
+
+        # Fall back to homing if a direct move was not requested,
+        # or if we don't know where the auger currently is.
+        if (not direct) or (self.current_x_time is None) or (self.current_y_time is None):
+            if not self.move_home():
+                return False
+            # move_home() sets current_x_time / current_y_time to 0.0
+
+        dx = target_x - self.current_x_time
+        dy = target_y - self.current_y_time
+
+        print(f"[PLC_SAMPLER] Move to ({x_pct}%, {y_pct}%) -> "
+              f"target ({target_x:.1f}s, {target_y:.1f}s), "
+              f"delta (dX={dx:+.1f}s, dY={dy:+.1f}s), direct={direct}")
+        logger.debug(f"Move to ({x_pct}%,{y_pct}%) target ({target_x:.1f}s,{target_y:.1f}s) "
+                     f"delta ({dx:+.1f}s,{dy:+.1f}s) direct={direct}")
+
+        # Y axis first (same order as the old sample_cycle: Y then X)
+        if dy > 0.2:
+            if not self.move_y_left(dy):     return False
+        elif dy < -0.2:
+            if not self.move_y_right(-dy):   return False
+
+        # X axis
+        if dx > 0.2:
+            if not self.move_x_reverse(dx):  return False
+        elif dx < -0.2:
+            if not self.move_x_forward(-dx): return False
+
+        # Update tracked position (clamped to physical travel limits)
+        self.current_x_time = max(0.0, min(target_x, float(self.total_x)))
+        self.current_y_time = max(0.0, min(target_y, float(self.total_y)))
+        return True
 
     def start_cycle(self, cycle: int = 1):
 
@@ -354,6 +459,9 @@ class SamplerController:
             self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
             print(f"[PLC_SAMPLER] Cycle {cycle} initiated.")
 
+            # Arm the Z-UP FB watcher: cycle completes when Z goes 1 -> 0 -> 1
+            self.arm_z_cycle()
+
         except Exception as e:
             msg = f"Cycle start error: {e}"
             print(f"[PLC_SAMPLER] {msg}")
@@ -370,6 +478,12 @@ class SamplerController:
             time.sleep(1)
             self.plc.writeIntToPLC(self.client, CYCLE_STOP, 0)
             logger.debug("0 - CYCLE_STOP")
+
+            # After cycle stop the machine handles the auger on its own —
+            # tracked position can no longer be trusted.
+            self.current_x_time = None
+            self.current_y_time = None
+            self._z_phase = "idle"
 
         except Exception as e:
             msg = f"Cycle stop error: {e}"
@@ -400,6 +514,12 @@ class SamplerController:
             self.plc.writeIntToPLC(self.client, Y_AXIS_RIGHT, 0)
             time.sleep(0.5)
             self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
+
+            # Invalidate tracked state — position unknown after reset
+            self.current_x_time = None
+            self.current_y_time = None
+            self._z_phase = "idle"
+
             self.mqtt.publish(TOPIC_OUT, {"status": "reset_done"})
             print("[PLC_SAMPLER] PLC reset complete.")
             logger.debug("Wrote 0 to |X_AXIS_FORWORD|X_AXIS_REVERSE|Y_AXIS_LEFT|Y_AXIS_RIGHT|")
@@ -410,7 +530,7 @@ class SamplerController:
             logger.error(f"{traceback.format_exc()}")
             self.mqtt.publish(TOPIC_OUT, {"status": "reset_error", "msg": msg})
             raise
-    
+
     def wait_for_emergency_clearance(self):
         counter = time.time()
         while True:
@@ -418,23 +538,23 @@ class SamplerController:
                 emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
                 time.sleep(0.5)
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 1)
-                
+
                 # Detect transition from emergency (0) to cleared (1)
                 if self._emergency_state_last == 0 and emergency == 1:
                     print("[PLC_SAMPLER] Emergency stop has been cleared!")
                     logger.debug("Emergency stop has been cleared!")
                     self.mqtt.publish(TOPIC_OUT, {"status": "emergency_cleared"})
                     break
-                
+
                 else:
                     if time.time() - counter > 3:  # Log every 2 seconds if still in emergency
                         print("[PLC_SAMPLER] Emergency stop activated!")
                         self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop"})
                         counter = time.time()
-                
+
                 self._emergency_state_last = emergency
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
-            
+
             except Exception as e:
                 print(f"[PLC_SAMPLER] Emergency status read error: {e}")
                 logger.error(f"{traceback.format_exc()}")
@@ -489,13 +609,14 @@ class SamplerController:
                     self.start_cycle(cycle)
                     self.mqtt.publish(TOPIC_OUT, {"status": "cycle_start_given"})
                 elif action == "sample_cycle":
-                    if self.move_home():
-                        x = data.get("x", 0)
-                        y = data.get("y", 0)
-                        if not self.move_y_left((y*self.total_y)/100): continue
-                        if not self.move_x_reverse((x*self.total_x)/100): continue
-                        time.sleep(2)
-                        self.mqtt.publish(TOPIC_OUT, {"status": "position_set"})
+                    # direct=True  -> travel from the current position (no homing)
+                    # direct=False -> home first, then absolute move (cycle 1)
+                    x = data.get("x", 0)
+                    y = data.get("y", 0)
+                    direct = data.get("direct", False)
+                    if not self.move_to_position(x, y, direct=direct): continue
+                    time.sleep(2)
+                    self.mqtt.publish(TOPIC_OUT, {"status": "position_set"})
                 elif action == "check_sample_cycle_complete":
                     if self.check_sample_cycle_complete():
                         self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
@@ -511,13 +632,17 @@ class SamplerController:
                 elif action == "reset":
                     self.reset()
 
+            # Keep the Z-UP FB watcher running on every loop pass (~0.5 s)
+            # so the 1 -> 0 dip is caught even between manager polls.
+            self.update_z_cycle()
+
             self._emergency_state_last = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
             if self._emergency_state_last == 0:
                 print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
                 self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop", "msg": "Code stopped manually due to emergency !"})
                 self.reset()
                 self.wait_for_emergency_clearance()
-            
+
             if not self.plc.writeIntToPLC(self.client, HEARTBIT, 1): break
             time.sleep(0.5)
 
