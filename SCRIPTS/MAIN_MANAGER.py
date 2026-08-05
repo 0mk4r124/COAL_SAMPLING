@@ -35,7 +35,7 @@ TOTAL_CYCLES    = 3
 HOME_POSITION_TIMEOUT = 200 # Wait up to x seconds for auger to return to home position before aborting
 SAMPLE_CYCLE_TIMEOUT = 600
 POSITION_CONFIRMATION_TIMEOUT = 300
-CLOSE_CYCLE_WAIT_TIME = 60*2 # Wait 2 minutes after all 3 cycles complete before writing cycle stop
+CLOSE_CYCLE_WAIT_TIME = int(60*1.5) # Wait 1.5 minutes after all 3 cycles complete before writing cycle stop
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 MOVEMENT_DURATION = 2 # Duration to move in each direction during auger position confirmation loops (in seconds)
 
@@ -93,7 +93,7 @@ def get_sample_positions(used_areas=None, prev_points=None):
 
     # Global bounds
     x_min, x_max = 35, 100
-    y_min, y_max = 45, 80
+    y_min, y_max = 40, 80
 
     # Grid split
     x_splits = 3
@@ -549,6 +549,8 @@ class Manager:
         # Auger position confirmation tracking
         self._confirmation_loop_count = 0
         self._confirmation_results = []
+        # When move_home was last commanded (for re-send throttling)
+        self._last_home_cmd = 0.0
 
         # ── Manual watchdog ───────────────────────────────────────────────────
         self._watchdog_mqtt = MQTT("MAIN_MANAGER_WATCHDOG")
@@ -997,6 +999,7 @@ class Manager:
         if status == "barrier_closed":
             print("[MANAGER] Barrier closed — moving auger to home ")
             self._sampler(action="move_home")
+            self._last_home_cmd = time.time()
             self._goto(State.AUGER_HOME_POS)
         elif status == "barrier_error":
             print(f"[MANAGER] Barrier error: {msg.get('msg')}")
@@ -1004,11 +1007,12 @@ class Manager:
 
     def _handle_auger_home_pos(self):
         print("[MANAGER] Setting auger to home position ")
-        time.sleep(2)
 
         msg = self._pop("plc_sampler/status")
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
+            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
+            self._flush_topic("plc_sampler/status")  # drop stale queued messages
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
@@ -1016,20 +1020,33 @@ class Manager:
 
         if msg and msg.get("status") == "auger_home":
             print("[MANAGER] Auger at home position.")
+            logger.debug(f"Auger at home position after {self._elapsed():.1f}s")
             self._current_sample_index = 0
             self._successful_cycles = 0
             self._force_home_next = False   # Auger is at home — cycle 1 position can be absolute
             self._goto(State.CYCLE_POSITION)
-        
+            return
+
         if self._elapsed() > HOME_POSITION_TIMEOUT:
             print("[MANAGER] Home position timeout — Going back to vehicle placement")
             logger.debug("Home position timeout — Going back to vehicle placement")
             self._current_sample_index = 0
             self._successful_cycles = 0
             self._goto(State.VEHICLE_PLACEMENT)
+            return
 
-        self._sampler(action="move_home")
-        time.sleep(10)
+        # move_home was already commanded when the barrier closed.
+        # Only RE-send it if 15 s pass with no reply (lost-message safety net) —
+        # blind re-sends made the PLC re-run homing and queue duplicate
+        # 'auger_home' replies, and the old sleep(2)+sleep(10) per pass turned
+        # a ~3 s homing confirmation into ~14 s.
+        if time.time() - self._last_home_cmd > 15:
+            print("[MANAGER] No home confirmation yet — re-sending move_home")
+            logger.debug("No home confirmation yet — re-sending move_home")
+            self._sampler(action="move_home")
+            self._last_home_cmd = time.time()
+
+        time.sleep(1)
 
     def _handle_cycle_position(self):
         if self._successful_cycles >= TOTAL_CYCLES:
@@ -1063,10 +1080,12 @@ class Manager:
     def _handle_cycle_confirm(self):
         msg = self._pop("plc_sampler/status")
         print(f"[MANAGER] Cycle Waiting for position confirmation")
-        time.sleep(2)
+        time.sleep(1)  # faster polling — position_set is detected ~1s sooner
 
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
+            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
+            self._flush_topic("plc_sampler/status")  # drop stale queued messages
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
@@ -1084,7 +1103,7 @@ class Manager:
             self._sampler(action="start_cycle", cycle=cycle_num)
             print("[MANAGER] CYCLE START GIVEN !!!")
             logger.debug("Position set, cycle start given")
-            time.sleep(10)
+            time.sleep(1)  # settle time after cycle start (was 10s)
             self._goto(State.CYCLE_CAPTURE)
             return
         
@@ -1094,15 +1113,17 @@ class Manager:
             print("[MANAGER] Retrying with different position ")
             self.positions.pop()
             self._force_home_next = True   # Recover via home — position not trusted
-            time.sleep(2)
+            time.sleep(1)
             self._goto(State.CYCLE_POSITION)
 
     def _handle_cycle_capture(self):
         msg = self._pop("plc_sampler/status")
-        time.sleep(2)
+        time.sleep(1)
 
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
+            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
+            self._flush_topic("plc_sampler/status")  # drop stale queued messages
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
@@ -1111,17 +1132,19 @@ class Manager:
         if msg and msg.get("status") == "cycle_start_given":
             print("[MANAGER] Cycle start given and recieved !!")
             self._sampler(action="check_sample_cycle_complete")
-            time.sleep(8)
+            time.sleep(1)
             self._cam(action="cam3_single", path=self.paths[f"SAMPLE_{self.cycle}_IMG_PATH"])
 
         self._goto(State.CYCLE_DONE)
 
     def _handle_cycle_done(self):
-        time.sleep(3)
+        time.sleep(1)  # PLC now PUSHES sample_cycle_complete — poll fast to catch it
 
         msg = self._pop("plc_sampler/status")
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
+            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
+            self._flush_topic("plc_sampler/status")  # drop stale queued messages
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
@@ -1137,7 +1160,7 @@ class Manager:
             
             if self._successful_cycles >= TOTAL_CYCLES:
                 self._barrier(action="green_signal")
-                time.sleep(2)
+                time.sleep(1)
                 print(f"[MANAGER] All {TOTAL_CYCLES} successful cycles completed.")
                 logger.debug(f"All {TOTAL_CYCLES} successful cycles completed.")
                 # NEW PROCESS: the auger stays at the last position — go straight
@@ -1146,6 +1169,7 @@ class Manager:
             else:
                 print(f"[MANAGER] Moving DIRECTLY to next sampling position (no homing) ")
                 self._goto(State.CYCLE_POSITION)
+
         elif msg and msg.get("status", "") == "cycle_error":
             print(f"[MANAGER] Cycle error: {msg.get('msg')}")
             print("[MANAGER] Retrying with different position ")
@@ -1160,7 +1184,7 @@ class Manager:
         else:
             print("[MANAGER] Cycle in progress — waiting ")
             self._sampler(action="check_sample_cycle_complete")
-            time.sleep(3)
+            time.sleep(2)
             
     def _handle_all_samples_collection(self):
         msg = self._pop("plc_barrier/status")
@@ -1173,6 +1197,8 @@ class Manager:
 
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
+            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
+            self._flush_topic("plc_sampler/status")  # drop stale queued messages
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
@@ -1194,6 +1220,14 @@ class Manager:
 
     def _handle_cycle_emergency_wait(self):
         print("[MANAGER] Waiting for emergency stop clearance on Sampler PLC ")
+        logger.warning("Waiting for emergency stop clearance on Sampler PLC")
+
+        # ACTIVELY query the LIVE emergency bit on the PLC instead of passively
+        # waiting for a pushed 'emergency_cleared'. This prevents the deadlock
+        # where a STALE queued 'emergency_stop' message put us in this state
+        # AFTER the emergency was already cleared (the clearance push was
+        # already consumed/lost, so it would never arrive again).
+        self._sampler(action="check_emergency")
         time.sleep(3)  # Poll every 3 seconds
         
         msg = self._pop("plc_sampler/status")
@@ -1201,6 +1235,11 @@ class Manager:
             return
         
         status = msg.get("status", "")
+        if status == "emergency_stop":
+            print("[MANAGER] Emergency still active — waiting ")
+            logger.warning("Emergency still active — waiting")
+            return
+
         if status == "emergency_cleared":
             db_update_plc_comm(self.uid, "VEHICLE_PLACEMENT")
             self._barrier(action="check_truck")
@@ -1208,6 +1247,7 @@ class Manager:
             self._flush_topic("plc_sampler/status")
             time.sleep(2)
             print("[MANAGER] Emergency stop cleared. Resuming operation ")
+            logger.warning("Emergency stop cleared — resuming operation from VEHICLE_PLACEMENT")
             
             # Reset successful cycles and return to CYCLE_CONFIRM
             self._successful_cycles = 0

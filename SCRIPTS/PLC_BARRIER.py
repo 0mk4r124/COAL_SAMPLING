@@ -34,6 +34,7 @@ TRUN_TABLE_COUNT_READ = 30
 
 BARRIER_OPEN_TIMEOUT = 10
 SET_BUCKET_TIMEOUT = 10
+BUCKET_SET_TIMEOUT = 60*2
 
 TOPIC_IN  = "manager/plc_barrier"
 TOPIC_OUT = "plc_barrier/status"
@@ -182,7 +183,16 @@ class BarrierController:
             logger.debug(f"1 - TRUN_TABLE_COUNT")
             print(f"[PLC_BARRIER] Setting bucket {bucket_number} command sent")
 
+            bucket_wait_start = time.time()
             while True:
+                if (time.time() - bucket_wait_start) > BUCKET_SET_TIMEOUT:
+                    print(f"[PLC_BARRIER] Bucket set timeout after {BUCKET_SET_TIMEOUT}s (wanted {bucket_number}, last read {bucket_bit})")
+                    logger.warning(f"Bucket set timeout after {BUCKET_SET_TIMEOUT}s (wanted {bucket_number}, last read {bucket_bit})")
+                    self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 0)
+                    logger.debug(f"0 - TRUN_TABLE_COUNT")
+                    self.mqtt.publish(TOPIC_OUT, {"status": "bucket_set_timeout"})
+                    break
+
                 self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
                 bucket_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_COUNT_READ)
                 print(f"[PLC_BARRIER] bucket_bit {bucket_bit} ")
@@ -256,11 +266,11 @@ class BarrierController:
                 elif action == "close_barrier":
                     self.close_barrier()
                 elif action == "check_truck":
-                    self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
-                    # if self.truck_present():
-                    #     self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
-                    # else:
-                    #     self.mqtt.publish(TOPIC_OUT, {"status": "truck_not_present"})
+                    # self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
+                    if self.truck_present():
+                        self.mqtt.publish(TOPIC_OUT, {"status": "truck_present"})
+                    else:
+                        self.mqtt.publish(TOPIC_OUT, {"status": "truck_not_present"})
                     time.sleep(0.5)
                 elif action == "set_bucket":
                     print(f"[PLC_BARRIER] Setting Bucket")

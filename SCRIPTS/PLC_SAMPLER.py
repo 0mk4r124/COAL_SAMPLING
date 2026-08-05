@@ -65,6 +65,13 @@ class SamplerController:
         # "down_seen" -> Z went down, waiting for Z_UP FB to come back UP (0 -> 1)
         # "complete"  -> Z came back up -> the sampling cycle is complete
         self._z_phase = "idle"
+        # Push sample_cycle_complete to the manager the moment Z comes back up
+        # (instead of waiting for the manager's next poll)
+        self._z_complete_published = False
+
+        # Drive X and Y at the same time during positioning (much faster than
+        # sequential Y-then-X). Set False to fall back to sequential moves.
+        self.simultaneous_xy = True
 
     def check_auto_manual(self):
         auto_manual = 0
@@ -79,11 +86,28 @@ class SamplerController:
 
         return auto_manual
 
+    def check_emergency(self):
+        """
+        Read the LIVE emergency bit (1 = normal, 0 = emergency).
+        Used by the manager to verify actual emergency state instead of
+        relying on possibly-stale queued MQTT messages.
+        """
+        try:
+            emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+            print(f"[PLC_SAMPLER] Live emergency status: {emergency} (1=normal, 0=emergency)")
+            logger.debug(f"Live emergency status: {emergency} (1=normal, 0=emergency)")
+            return emergency
+        except Exception as e:
+            print(f"[PLC_SAMPLER] check_emergency error: {e}")
+            logger.error(f"{traceback.format_exc()}")
+            raise
+
     # ── Z-UP FB cycle tracking ────────────────────────────────────────────────
 
     def arm_z_cycle(self):
         """Arm the Z-UP FB watcher. Called right after CYCLE_START is pulsed."""
         self._z_phase = "armed"
+        self._z_complete_published = False
         print("[PLC_SAMPLER] Z-cycle armed — waiting for Z_UP FB 1 -> 0 -> 1")
         logger.debug("Z-cycle armed — waiting for Z_UP FB 1 -> 0 -> 1")
 
@@ -378,6 +402,88 @@ class SamplerController:
 
     # ── Positioning (absolute via home / relative from current position) ─────
 
+    def move_xy(self, dx, dy):
+        """
+        Drive X and Y axes SIMULTANEOUSLY (single loop) — travel time becomes
+        max(|dx|, |dy|) instead of |dx| + |dy|.
+
+        dx > 0 -> X reverse for dx seconds   |  dx < 0 -> X forward for |dx| s
+        dy > 0 -> Y left    for dy seconds   |  dy < 0 -> Y right   for |dy| s
+
+        Each axis stops on its own timer or when its limit sensor trips.
+        """
+        x_dur = abs(dx)
+        y_dur = abs(dy)
+        x_out = X_AXIS_REVERSE      if dx > 0 else X_AXIS_FORWORD
+        x_fb  = X_REVERSE_SENSOR_FB if dx > 0 else X_FORWORD_SENSOR_FB
+        y_out = Y_AXIS_LEFT         if dy > 0 else Y_AXIS_RIGHT
+        y_fb  = Y_LEFT_SENSOR_FB    if dy > 0 else Y_RIGHT_SENSOR_FB
+        x_name = "X_AXIS_REVERSE" if dx > 0 else "X_AXIS_FORWORD"
+        y_name = "Y_AXIS_LEFT"    if dy > 0 else "Y_AXIS_RIGHT"
+
+        x_active = x_dur > 0.2
+        y_active = y_dur > 0.2
+
+        try:
+            print(f"[PLC_SAMPLER] Simultaneous move  X({x_name}): {x_dur:.1f}s  Y({y_name}): {y_dur:.1f}s")
+            logger.debug(f"Simultaneous move  X({x_name}): {x_dur:.1f}s  Y({y_name}): {y_dur:.1f}s")
+
+            start = time.time()
+            heart = 0
+
+            while x_active or y_active:
+                emergency = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
+                if emergency == 0:
+                    print(f"[PLC_SAMPLER] Emergency stop activated during move")
+                    logger.warning("Emergency stop activated during simultaneous move")
+                    self.plc.writeIntToPLC(self.client, x_out, 0)
+                    self.plc.writeIntToPLC(self.client, y_out, 0)
+                    self.reset()
+                    return False
+
+                elapsed = time.time() - start
+
+                # X axis
+                if x_active:
+                    x_hit = self.plc.readIntFromPLC(self.client, x_fb)
+                    if (elapsed >= x_dur) or (x_hit == 1):
+                        self.plc.writeIntToPLC(self.client, x_out, 0)
+                        logger.debug(f"0 - {x_name}")
+                        x_active = False
+                    else:
+                        self.plc.writeIntToPLC(self.client, x_out, 1)
+                        logger.debug(f"1 - {x_name}")
+
+                # Y axis
+                if y_active:
+                    y_hit = self.plc.readIntFromPLC(self.client, y_fb)
+                    if (elapsed >= y_dur) or (y_hit == 1):
+                        self.plc.writeIntToPLC(self.client, y_out, 0)
+                        logger.debug(f"0 - {y_name}")
+                        y_active = False
+                    else:
+                        self.plc.writeIntToPLC(self.client, y_out, 1)
+                        logger.debug(f"1 - {y_name}")
+
+                # Heartbeat toggle
+                heart = 1 - heart
+                self.plc.writeIntToPLC(self.client, HEARTBIT, heart)
+                time.sleep(0.5)
+
+            # Make sure both outputs are off
+            time.sleep(0.5)
+            self.plc.writeIntToPLC(self.client, x_out, 0)
+            self.plc.writeIntToPLC(self.client, y_out, 0)
+            time.sleep(0.5)
+            return True
+
+        except Exception as e:
+            msg = f"Simultaneous XY movement error: {e}"
+            print(f"[PLC_SAMPLER] {msg}")
+            logger.error(f"{traceback.format_exc()}")
+            self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
+            raise
+
     def move_to_position(self, x_pct, y_pct, direct=False):
         """
         Move the auger to (x_pct, y_pct) — percentages of full travel.
@@ -411,17 +517,21 @@ class SamplerController:
         logger.debug(f"Move to ({x_pct}%,{y_pct}%) target ({target_x:.1f}s,{target_y:.1f}s) "
                      f"delta ({dx:+.1f}s,{dy:+.1f}s) direct={direct}")
 
-        # Y axis first (same order as the old sample_cycle: Y then X)
-        if dy > 0.2:
-            if not self.move_y_left(dy):     return False
-        elif dy < -0.2:
-            if not self.move_y_right(-dy):   return False
+        if self.simultaneous_xy:
+            # Drive both axes at once — travel time = max(|dX|, |dY|)
+            if (abs(dx) > 0.2) or (abs(dy) > 0.2):
+                if not self.move_xy(dx, dy): return False
+        else:
+            # Sequential fallback: Y first, then X (old behaviour)
+            if dy > 0.2:
+                if not self.move_y_left(dy):     return False
+            elif dy < -0.2:
+                if not self.move_y_right(-dy):   return False
 
-        # X axis
-        if dx > 0.2:
-            if not self.move_x_reverse(dx):  return False
-        elif dx < -0.2:
-            if not self.move_x_forward(-dx): return False
+            if dx > 0.2:
+                if not self.move_x_reverse(dx):  return False
+            elif dx < -0.2:
+                if not self.move_x_forward(-dx): return False
 
         # Update tracked position (clamped to physical travel limits)
         self.current_x_time = max(0.0, min(target_x, float(self.total_x)))
@@ -547,8 +657,9 @@ class SamplerController:
                     break
 
                 else:
-                    if time.time() - counter > 3:  # Log every 2 seconds if still in emergency
+                    if time.time() - counter > 3:  # Log every 3 seconds if still in emergency
                         print("[PLC_SAMPLER] Emergency stop activated!")
+                        logger.warning("Emergency stop still active — waiting for clearance")
                         self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop"})
                         counter = time.time()
 
@@ -572,6 +683,7 @@ class SamplerController:
             self._emergency_state_last = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
             if self._emergency_state_last == 0:
                 print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                logger.warning("Emergency stop activated — resetting outputs and waiting for clearance")
                 self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop", "msg": "Code stopped manually due to emergency !"})
                 self.reset()
                 self.wait_for_emergency_clearance()
@@ -615,8 +727,16 @@ class SamplerController:
                     y = data.get("y", 0)
                     direct = data.get("direct", False)
                     if not self.move_to_position(x, y, direct=direct): continue
-                    time.sleep(2)
+                    time.sleep(0.5)
                     self.mqtt.publish(TOPIC_OUT, {"status": "position_set"})
+                elif action == "check_emergency":
+                    # Live emergency verification for the manager — answers with
+                    # the ACTUAL current state so stale queued messages can't
+                    # deadlock the manager's emergency-wait state.
+                    if self.check_emergency() == 1:
+                        self.mqtt.publish(TOPIC_OUT, {"status": "emergency_cleared"})
+                    else:
+                        self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop"})
                 elif action == "check_sample_cycle_complete":
                     if self.check_sample_cycle_complete():
                         self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
@@ -636,9 +756,18 @@ class SamplerController:
             # so the 1 -> 0 dip is caught even between manager polls.
             self.update_z_cycle()
 
+            # PUSH completion to the manager the moment Z comes back up —
+            # removes the ~10 s poll-detection lag per cycle.
+            if self._z_phase == "complete" and not self._z_complete_published:
+                self._z_complete_published = True
+                self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
+                print("[PLC_SAMPLER] sample_cycle_complete pushed to manager")
+                logger.debug("sample_cycle_complete pushed to manager")
+
             self._emergency_state_last = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
             if self._emergency_state_last == 0:
                 print(f"[PLC_SAMPLER] Emergency stop activated, cannot move to home")
+                logger.warning("Emergency stop activated — resetting outputs and waiting for clearance")
                 self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop", "msg": "Code stopped manually due to emergency !"})
                 self.reset()
                 self.wait_for_emergency_clearance()
@@ -647,8 +776,8 @@ class SamplerController:
             time.sleep(0.5)
 
 def main():
-    total_x = 37
-    total_y = 15
+    total_x = 28
+    total_y = 13
 
     while True:
         controller = SamplerController(total_x, total_y)

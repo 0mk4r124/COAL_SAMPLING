@@ -6,6 +6,9 @@ import tempfile
 import uuid
 import subprocess
 import time
+import shutil
+import glob
+import io
 
 from datetime import datetime
 from fpdf import FPDF
@@ -111,6 +114,8 @@ def is_truck_below_line(img=None, image_path=None, threshold_ratio=THRESHOLD_RAT
             cv2.imwrite(str(image_path).split(".")[0]+"_mask.jpg", img)
             # bottom is below the 2/3 line
             return True
+        
+    cv2.imwrite(str(image_path).split(".")[0]+"_mask.jpg", img)
     return False
 
 
@@ -462,45 +467,44 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         print(f"ERROR: Error generating QR code: {e}")
         return ""
 
+# def compress_pdf(input_path: str, output_path: str = None, quality: str = "screen") -> str | None:
+#     if not os.path.exists(input_path):
+#         print(f"[PDF] Input file not found: {input_path}")
+#         return None
 
-def compress_pdf(input_path: str, output_path: str = None, quality: str = "screen") -> str | None:
-    if not os.path.exists(input_path):
-        print(f"[PDF] Input file not found: {input_path}")
-        return None
+#     if output_path is None:
+#         output_path = input_path.replace(".pdf", "_compressed.pdf")
 
-    if output_path is None:
-        output_path = input_path.replace(".pdf", "_compressed.pdf")
+#     # Detect OS-specific Ghostscript binary
+#     gs_cmd = "gs"
+#     if os.name == "nt":
+#         gs_cmd = r"C:\Program Files\gs\gs10.03.0\bin\gswin64c.exe"
 
-    # Detect OS-specific Ghostscript binary
-    gs_cmd = "gs"
-    if os.name == "nt":
-        gs_cmd = r"C:\Program Files\gs\gs10.03.0\bin\gswin64c.exe"
+#     cmd = [
+#         gs_cmd,
+#         "-sDEVICE=pdfwrite",
+#         "-dCompatibilityLevel=1.4",
+#         f"-dPDFSETTINGS=/{quality}",
+#         "-dNOPAUSE",
+#         "-dQUIET",
+#         "-dBATCH",
+#         f"-sOutputFile={output_path}",
+#         input_path,
+#     ]
 
-    cmd = [
-        gs_cmd,
-        "-sDEVICE=pdfwrite",
-        "-dCompatibilityLevel=1.4",
-        f"-dPDFSETTINGS=/{quality}",
-        "-dNOPAUSE",
-        "-dQUIET",
-        "-dBATCH",
-        f"-sOutputFile={output_path}",
-        input_path,
-    ]
+#     try:
+#         subprocess.run(cmd, check=True)
 
-    try:
-        subprocess.run(cmd, check=True)
+#         if os.path.exists(output_path):
+#             print(f"[PDF] Compression successful: {output_path}")
+#             return output_path
+#         else:
+#             print("[PDF] Compression failed: Output not created")
+#             return None
 
-        if os.path.exists(output_path):
-            print(f"[PDF] Compression successful: {output_path}")
-            return output_path
-        else:
-            print("[PDF] Compression failed: Output not created")
-            return None
-
-    except Exception as e:
-        print(f"[PDF] Compression failed: {e}")
-        return None
+#     except Exception as e:
+#         print(f"[PDF] Compression failed: {e}")
+#         return None
 
 def clean_logo(img_path: str, name: str) -> str | None:
     """
@@ -718,6 +722,212 @@ def generate_sampling_report(report_data: dict) -> bool:
     except Exception as e:
         print(f"[PDF] Error: {e}")
         return False
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LOGIC.py — PATCH: fix compress_pdf ([WinError 2] The system cannot find the
+# file specified)
+#
+# ROOT CAUSE: compress_pdf used a HARDCODED Ghostscript path
+#     C:\Program Files\gs\gs10.03.0\bin\gswin64c.exe
+# which does not exist on this machine (not installed / different version),
+# so subprocess.run failed with WinError 2 before touching the PDF.
+#
+# HOW TO APPLY:
+#   1. Add `glob`, `shutil`, `io` to the imports at the top of LOGIC.py:
+#          import glob
+#          import shutil
+#          import io
+#      (os, subprocess are already imported)
+#   2. REPLACE the existing compress_pdf() function with everything below
+#      (the two helper functions + the new compress_pdf).
+#
+# BEHAVIOUR:
+#   - Auto-detects Ghostscript: PATH first, then ANY version under
+#     C:\Program Files\gs\gs*\bin (newest first). No more hardcoded version.
+#   - If Ghostscript is not installed at all, falls back to a pure-Python
+#     compressor (pikepdf + PIL — pikepdf is already used by PDF_UTILS.py)
+#     that downscales/re-encodes the embedded JPEG images.
+#   - Compresses the EXISTING file IN PLACE: writes to a temp file, then
+#     atomically replaces the original, so REPORT_PATH in the DB / QR keeps
+#     pointing at the (now smaller) same file. No *_compressed.pdf leftovers.
+#   - Keeps the original untouched if compression fails or wouldn't shrink it.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _find_ghostscript() -> str | None:
+    """Locate a Ghostscript executable on this machine (any installed version)."""
+    # 1) On PATH?
+    for name in ("gswin64c", "gswin32c", "gs"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    # 2) Standard Windows install locations — ANY version, newest first
+    if os.name == "nt":
+        patterns = [
+            r"C:\Program Files\gs\gs*\bin\gswin64c.exe",
+            r"C:\Program Files\gs\gs*\bin\gswin32c.exe",
+            r"C:\Program Files (x86)\gs\gs*\bin\gswin32c.exe",
+        ]
+        for pat in patterns:
+            matches = sorted(glob.glob(pat), reverse=True)
+            if matches:
+                return matches[0]
+
+    return None
+
+
+def _compress_pdf_pikepdf(input_path: str, output_path: str,
+                          jpeg_quality: int = 60, max_dim: int = 1600) -> bool:
+    """
+    Pure-Python fallback (no Ghostscript needed): downscale + re-encode the
+    embedded JPEG images and recompress all streams using pikepdf + PIL.
+    Works well for our FPDF reports, whose size is almost entirely camera JPEGs.
+    """
+    try:
+        import pikepdf
+    except ImportError:
+        print("[PDF] pikepdf not available for fallback compression")
+        return False
+
+    try:
+        with pikepdf.open(input_path) as pdf:
+            for page in pdf.pages:
+                try:
+                    images = page.images
+                except Exception:
+                    continue
+
+                for _name, raw in images.items():
+                    try:
+                        pimg = pikepdf.PdfImage(raw)
+                        pil = pimg.as_pil_image()
+
+                        # Downscale big camera frames
+                        if max(pil.size) > max_dim:
+                            pil.thumbnail((max_dim, max_dim), Image.LANCZOS)
+
+                        if pil.mode != "RGB":
+                            pil = pil.convert("RGB")
+
+                        buf = io.BytesIO()
+                        pil.save(buf, format="JPEG", quality=jpeg_quality, optimize=True)
+
+                        raw.write(buf.getvalue(), filter=pikepdf.Name("/DCTDecode"))
+                        raw.Width = pil.width
+                        raw.Height = pil.height
+                        raw.ColorSpace = pikepdf.Name("/DeviceRGB")
+                        raw.BitsPerComponent = 8
+                    except Exception:
+                        # Skip images that can't be processed — keep them as-is
+                        continue
+
+            pdf.save(output_path, compress_streams=True,
+                     recompress_flate=True)
+
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
+
+    except Exception as e:
+        print(f"[PDF] pikepdf fallback compression failed: {e}")
+        logger.error(f"pikepdf fallback compression failed: {e}", exc_info=True)
+        return False
+
+
+def compress_pdf(input_path: str, output_path: str = None,
+                 quality: str = "screen", replace_original: bool = True) -> str | None:
+    """
+    Compress a PDF.
+      - Tries Ghostscript (auto-detected, any installed version).
+      - Falls back to pikepdf+PIL if Ghostscript is not installed.
+      - By default compresses the EXISTING file IN PLACE (replace_original=True):
+        the original at input_path is replaced by the compressed version, so
+        every stored path keeps working.
+      - Pass output_path to write to a different file instead (original kept).
+
+    Returns the path of the compressed PDF, or None on failure
+    (the original file is always left intact on failure).
+    """
+    if not os.path.exists(input_path):
+        print(f"[PDF] Input file not found: {input_path}")
+        return None
+
+    orig_size = os.path.getsize(input_path)
+
+    # Work file: never write over the original directly
+    if output_path is None:
+        tmp_out = input_path.replace(".pdf", "_compressed_tmp.pdf")
+    else:
+        tmp_out = output_path
+
+    compressed = False
+
+    # ── Attempt 1: Ghostscript (auto-detected) ────────────────────────────────
+    gs_cmd = _find_ghostscript()
+    if gs_cmd:
+        print(f"[PDF] Using Ghostscript: {gs_cmd}")
+        logger.debug(f"Using Ghostscript: {gs_cmd}")
+        cmd = [
+            gs_cmd,
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.4",
+            f"-dPDFSETTINGS=/{quality}",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH",
+            f"-sOutputFile={tmp_out}",
+            input_path,
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+            compressed = os.path.exists(tmp_out) and os.path.getsize(tmp_out) > 0
+        except Exception as e:
+            print(f"[PDF] Ghostscript compression failed: {e}")
+            logger.error(f"Ghostscript compression failed: {e}", exc_info=True)
+            compressed = False
+    else:
+        print("[PDF] Ghostscript not found on this machine — using Python fallback")
+        logger.warning("Ghostscript not found — using pikepdf fallback for PDF compression")
+
+    # ── Attempt 2: pure-Python fallback (pikepdf + PIL) ───────────────────────
+    if not compressed:
+        compressed = _compress_pdf_pikepdf(input_path, tmp_out)
+
+    if not compressed:
+        print("[PDF] Compression failed: no working compressor — original kept")
+        logger.error("PDF compression failed with all methods — original kept")
+        if os.path.exists(tmp_out) and tmp_out != input_path:
+            try: os.remove(tmp_out)
+            except Exception: pass
+        return None
+
+    new_size = os.path.getsize(tmp_out)
+
+    # Only keep the result if it's actually smaller
+    if new_size >= orig_size:
+        print(f"[PDF] Compressed file not smaller "
+              f"({new_size/1024:.0f} KB >= {orig_size/1024:.0f} KB) — original kept")
+        try: os.remove(tmp_out)
+        except Exception: pass
+        return input_path
+
+    # Swap the compressed file into place (or hand back the separate output)
+    if replace_original and output_path is None:
+        try:
+            os.replace(tmp_out, input_path)   # atomic on the same drive
+            final_path = input_path
+        except Exception as e:
+            print(f"[PDF] Could not replace original: {e} — keeping compressed copy")
+            logger.error(f"Could not replace original PDF: {e}", exc_info=True)
+            final_path = tmp_out
+    else:
+        final_path = tmp_out
+
+    print(f"[PDF] Compression successful: {final_path} "
+          f"({orig_size/1024:.0f} KB -> {new_size/1024:.0f} KB, "
+          f"-{(1 - new_size/orig_size)*100:.0f}%)")
+    logger.debug(f"PDF compressed: {final_path} "
+                 f"({orig_size/1024:.0f} KB -> {new_size/1024:.0f} KB)")
+    return final_path
 
 if __name__ == "__main__":
     # generate_qr_code("OMKAR", "1234", "345", "/home/omkar/INSIGHTZZ/PROJECTS/COAL_SAMPLING/COAL_SAMPLING/TEST_QR.png")
