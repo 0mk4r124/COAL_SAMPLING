@@ -467,7 +467,7 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
         print(f"ERROR: Error generating QR code: {e}")
         return ""
 
-# def compress_pdf(input_path: str, output_path: str = None, quality: str = "screen") -> str | None:
+# def compress_pdf(input_path: str, output_path: str = None, quality: str = "screen") -> str :
 #     if not os.path.exists(input_path):
 #         print(f"[PDF] Input file not found: {input_path}")
 #         return None
@@ -506,7 +506,7 @@ def generate_qr_code(vendor_name: str, vehicle_number: str, uid: str, save_path:
 #         print(f"[PDF] Compression failed: {e}")
 #         return None
 
-def clean_logo(img_path: str, name: str) -> str | None:
+def clean_logo(img_path: str, name: str) -> str:
     """
     Removes black background-ish pixels and converts the logo to a clean RGB PNG.
     A unique temp file is created for each logo so left/right logos do not overwrite each other.
@@ -536,7 +536,7 @@ def clean_logo(img_path: str, name: str) -> str | None:
         print(f"[IMG] Logo prepare failed for {img_path}: {e}")
         return None
 
-def image_size_mm(img_path: str, max_width_mm: float) -> tuple[float, float]:
+def image_size_mm(img_path: str, max_width_mm: float) -> tuple:
     """
     Returns width and height in mm, scaled to fit max_width_mm.
     """
@@ -754,7 +754,7 @@ def generate_sampling_report(report_data: dict) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _find_ghostscript() -> str | None:
+def _find_ghostscript() -> str :
     """Locate a Ghostscript executable on this machine (any installed version)."""
     # 1) On PATH?
     for name in ("gswin64c", "gswin32c", "gs"):
@@ -834,7 +834,7 @@ def _compress_pdf_pikepdf(input_path: str, output_path: str,
 
 
 def compress_pdf(input_path: str, output_path: str = None,
-                 quality: str = "screen", replace_original: bool = True) -> str | None:
+                 quality: str = "screen", replace_original: bool = True) -> str :
     """
     Compress a PDF.
       - Tries Ghostscript (auto-detected, any installed version).

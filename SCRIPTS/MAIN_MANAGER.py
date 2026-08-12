@@ -881,7 +881,8 @@ class Manager:
         print("[MANAGER] Sending open barrier command ")
         self._cam(action="cam2_single", path=self.paths["VEHICLE_IMG_PATH"])
         self._barrier(action="open_barrier")
-        time.sleep(2)
+        self._cam(action="sample_capture_start", uid=self.uid)
+        time.sleep(1)
         
         self._goto(State.BARRIER_OPENING)
 
@@ -1260,6 +1261,7 @@ class Manager:
 
     def _handle_complete_final(self):
         msg = self._pop("plc_sampler/status")
+        self._cam(action="sample_capture_stop", uid=self.uid)
 
         if msg and msg.get("status") == "sample_cycle_stop_comp": 
             print(f"[MANAGER] Sampling complete — generating QR code ")
