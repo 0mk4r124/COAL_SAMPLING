@@ -138,6 +138,7 @@ _CONTENT_TYPES = {
     ".jpg":  "image/jpeg",
     ".jpeg": "image/jpeg",
     ".csv":  "text/csv",
+    ".zip": "application/zip",
 }
 
 

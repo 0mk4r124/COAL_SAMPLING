@@ -8,6 +8,8 @@ import threading
 
 from datetime import datetime, timedelta
 
+from DEPENDANT.TRAINING_SYNC import run_training_sync
+
 # ================= CONFIG =================
 DB_CONFIG = {
     "host": "localhost",
@@ -22,6 +24,7 @@ BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PROD
 
 SYNC_INTERVAL = 600  # 10 minutes
 BATCH_SIZE = 5
+SYNC_TRAINING_DATA = True
 # ==========================================
 
 
@@ -242,12 +245,23 @@ def run_uptime_sync():
         time.sleep(30)
 
 if __name__ == "__main__":
-    t1 = threading.Thread(target=run_uptime_sync, name="UptimeSyncThread", daemon=True)
-    t2 = threading.Thread(target=run_sync, name="SyncThread", daemon=True)
+    threads = []
 
-    t1.start()
-    t2.start()
+    # t1 = threading.Thread(target=run_uptime_sync, name="UptimeSyncThread", daemon=True)
+    # t2 = threading.Thread(target=run_sync, name="SyncThread", daemon=True)
+    # threads += [t1, t2]
 
-    # Keep main thread alive if needed
-    t1.join()
-    t2.join()
+    # Training data sync — only when the flag above is on
+    if SYNC_TRAINING_DATA:
+        t3 = threading.Thread(target=run_training_sync, name="TrainingSyncThread", daemon=True)
+        threads.append(t3)
+        print("[SYNC] Training data sync ENABLED")
+    else:
+        print("[SYNC] Training data sync DISABLED (SYNC_TRAINING_DATA = False)")
+
+    for t in threads:
+        t.start()
+
+    # Keep the main thread alive
+    for t in threads:
+        t.join()

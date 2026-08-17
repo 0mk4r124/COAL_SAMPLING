@@ -11,12 +11,95 @@ import logging
 import traceback
 from datetime import datetime
 
-from DEPENDANT.AZURE_SERVICE import azure_send_mail
+from DEPENDANT.AZURE_SERVICE import azure_send_mail, azure_upload_file
 
 logger = logging.getLogger(__name__)
 
 RECIPIENTS = [r.strip() for r in os.getenv("ALERT_RECIPIENTS", "").split(",") if r.strip()]
+MAIL_ATTACH_LIMIT_MB = 3.0   # Graph inline attachment ceiling
 
+
+def send_cycle_complete_mail(uid: str, vehicle_no: str, vendor: str,
+                             raw_zip_parts: list[str] | None, raw_img_count: int,
+                             raw_total_mb: float = 0.0,
+                             report_pdf_path: str | None = None) -> tuple[bool, list[str]]:
+    """
+    End-of-cycle mail: sampling done for this vehicle, with download links to
+    the UNMODIFIED full-resolution raw training images.
+
+    raw_zip_parts : zip paths from RAW_IMAGE_UTILS.archive_raw_images()
+    raw_img_count : number of images inside the archive
+    raw_total_mb  : total archive size, for the mail body
+    report_pdf_path: optional sampling-report PDF, attached inline if it fits
+
+    Returns (mail_sent, uploaded_parts) — uploaded_parts are the zips that
+    reached OneDrive and can now be deleted locally by the caller.
+    """
+    attachments: list[str] = []
+    uploaded: list[str] = []
+    links: list[str] = []
+    failed: list[str] = []
+
+    # ── Upload each zip part to OneDrive and collect the links ──────────────
+    for part in raw_zip_parts or []:
+        if not part or not os.path.exists(part):
+            continue
+        try:
+            link = azure_upload_file(part)
+        except Exception:
+            logger.error(f"[ALERT] Raw archive upload failed for {part}:\n{traceback.format_exc()}")
+            link = None
+
+        if link:
+            links.append(f"  {os.path.basename(part)}\n    {link}")
+            uploaded.append(part)
+        else:
+            failed.append(part)
+
+    # ── Build the raw-images section of the body ────────────────────────────
+    if not raw_zip_parts:
+        raw_note = "Raw training images: none were collected for this session."
+    elif links and not failed:
+        part_word = "part" if len(links) == 1 else "parts"
+        raw_note = (
+            f"Raw training images: {raw_img_count} full-resolution frames "
+            f"(3840x2160, unmodified), {raw_total_mb} MB in {len(links)} zip {part_word}.\n"
+            f"Download link(s):\n" + "\n".join(links)
+        )
+    elif links and failed:
+        raw_note = (
+            f"Raw training images: {raw_img_count} frames, {raw_total_mb} MB — "
+            f"PARTIAL UPLOAD.\nUploaded:\n" + "\n".join(links) +
+            "\n\nThese parts failed to upload and are still on the sampling PC:\n" +
+            "\n".join(f"  {p}" for p in failed)
+        )
+    else:
+        raw_note = (
+            f"Raw training images: {raw_img_count} frames, {raw_total_mb} MB collected, "
+            f"but the upload FAILED.\nThe archive is kept on the sampling PC at:\n" +
+            "\n".join(f"  {p}" for p in failed)
+        )
+
+    # ── Report PDF is small enough to attach inline ─────────────────────────
+    if report_pdf_path and os.path.exists(report_pdf_path):
+        if (os.path.getsize(report_pdf_path) / (1024 * 1024)) <= MAIL_ATTACH_LIMIT_MB:
+            attachments.append(report_pdf_path)
+
+    body = (
+        "SAMPLING CYCLE COMPLETED at the coal sampling station.\n\n"
+        f"Session UID    : {uid}\n"
+        f"Vehicle Number : {vehicle_no}\n"
+        f"Vendor         : {vendor}\n"
+        f"Time           : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n\n"
+        f"{raw_note}\n"
+    )
+
+    sent = _safe_send(
+        f"[COAL SAMPLING DHAR] Cycle complete - {vehicle_no} (UID {uid})",
+        body,
+        attachments=attachments or None,
+    )
+    return sent, uploaded
 
 def _safe_send(subject: str, body: str, attachments: list[str] | None = None) -> bool:
     """Never let a mail failure crash the state machine."""

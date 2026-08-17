@@ -1,3 +1,20 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN_MANAGER.py — HARD MATERIAL CHANGES
+#
+# This file contains the COMPLETE replacement versions of every section of
+# MAIN_MANAGER.py that changes for the MATERIAL_HARD_STATUS feature.
+# Paste each section over the matching original section — everything else in
+# MAIN_MANAGER.py stays exactly as it is.
+#
+# Sections:
+#   1. Tuning constants           -> add below the existing "# ── Tuning ──" block
+#   2. get_nearby_position()      -> add right after get_sample_positions()
+#   3. State-variable init        -> add wherever self.positions / _force_home_next
+#                                    are initialised (per-vehicle reset)
+#   4. _handle_cycle_position()   -> FULL replacement
+#   5. _handle_cycle_done()       -> FULL replacement
+# ═══════════════════════════════════════════════════════════════════════════════
+
 import os
 import time
 import random
@@ -35,9 +52,15 @@ TOTAL_CYCLES    = 3
 HOME_POSITION_TIMEOUT = 200 # Wait up to x seconds for auger to return to home position before aborting
 SAMPLE_CYCLE_TIMEOUT = 600
 POSITION_CONFIRMATION_TIMEOUT = 300
-CLOSE_CYCLE_WAIT_TIME = int(60*1.5) # Wait 1.5 minutes after all 3 cycles complete before writing cycle stop
+CLOSE_CYCLE_WAIT_TIME = int(60*2) # Wait 2 minutes after all 3 cycles complete before writing cycle stop
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 MOVEMENT_DURATION = 2 # Duration to move in each direction during auger position confirmation loops (in seconds)
+HARD_RETRY_MAX_SHIFT      = 10  # Max % offset on X and Y for the nearby retry point (user spec: not more than 10%)
+HARD_MATERIAL_MAX_RETRIES = 3   # After this many consecutive hard hits, give up "nearby" and pick a fresh area via home
+# ── Sampling geometry ─────────────────────────────────────────────────────────
+X_MIN, X_MAX = 35, 100   # X travel bounds, % of full travel
+Y_MIN, Y_MAX = 40, 80    # Y travel bounds, % of full travel
+MIN_X_GAP    = 20        # Minimum X separation between the 3 sample points (%)
 
 BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 TEMP_IMG_PATH = os.path.join(BASE_FILE_PATH, "TEMP_IMG")
@@ -74,66 +97,49 @@ def build_rfid_key(rfids, uid=None):
     return "|".join(rfids)
 
 def get_sample_positions(used_areas=None, prev_points=None):
+    """
+    Return the next sampling point.
+
+    Areas are taken IN ORDER: 1, then 2, then 3 (no random choice).
+    X moves left-to-right with at least MIN_X_GAP between consecutive points,
+    e.g. (41, 72, 92). The upper bound reserves MIN_X_GAP for each point still
+    to come, so the last area can never be squeezed out of range.
+    Y is free anywhere in its bounds.
+    """
     if used_areas is None:
         used_areas = []
-
     if prev_points is None:
         prev_points = []
 
-    # Define all possible areas
-    all_areas = set(range(1, 4))
-    available_areas = list(all_areas - set(used_areas))
+    all_areas = set(range(1, TOTAL_CYCLES + 1))
+    available = sorted(all_areas - set(used_areas))
 
-    if not available_areas:
+    if not available:
         print("All areas are already used")
         return None
 
-    # Pick random available area
-    area = random.choice(available_areas)
+    area = available[0]                       # sequential: 1 -> 2 -> 3
 
-    # Global bounds
-    x_min, x_max = 35, 100
-    y_min, y_max = 40, 80
+    # Lower bound: MIN_X_GAP past the right-most point already taken
+    x_lo = X_MIN
+    if prev_points:
+        x_lo = max(x_lo, max(p["x"] for p in prev_points) + MIN_X_GAP)
 
-    # Grid split
-    x_splits = 3
-    y_splits = 1
+    # Upper bound: leave room for the areas still to come
+    remaining_after = TOTAL_CYCLES - area
+    x_hi = X_MAX - (remaining_after * MIN_X_GAP)
 
-    x_step = (x_max - x_min) / x_splits
-    y_step = (y_max - y_min) / y_splits
+    # Safety net: only trips if a retry/fallback pushed a previous point high
+    if x_lo > x_hi:
+        print(f"[MANAGER] X range collapsed for area {area} "
+              f"(lo={x_lo}, hi={x_hi}) — clamping")
+        logger.warning(f"X range collapsed for area {area} (lo={x_lo}, hi={x_hi})")
+        x_lo = x_hi = min(max(x_lo, X_MIN), X_MAX)
 
-    # Map area --> grid index
-    row = (area - 1) // x_splits
-    col = (area - 1) % x_splits
-
-    # Cell bounds
-    x_start = x_min + col * x_step
-    x_end = x_start + x_step
-
-    y_start = y_min + row * y_step
-    y_end = y_start + y_step
-
-    # Minimum separation (18% of total width)
-    min_x_gap = int((x_max - x_min) * 0.18)
-
-    # Try multiple times to satisfy separation
-    for _ in range(10):
-        x = random.randint(int(x_start) + 5, int(x_end) - 5)
-        y = random.randint(int(y_start), int(y_end) - 1)
-
-        # Check distance from previous points
-        if all(abs(x - p["x"]) >= min_x_gap for p in prev_points):
-            return {
-                "x": x,
-                "y": y,
-                "area": area
-            }
-
-    # Fallback (if constraint fails after retries)
     return {
-        "x": x,
-        "y": y,
-        "area": area
+        "x": random.randint(int(x_lo), int(x_hi)),
+        "y": random.randint(Y_MIN, Y_MAX),
+        "area": area,
     }
 
 def db_deactivate_manuals() -> list[str]:
@@ -164,6 +170,37 @@ def db_deactivate_manuals() -> list[str]:
     finally:
         if db: db.close()
     return affected
+
+def get_nearby_position(pos, prev_points=None, max_shift=HARD_RETRY_MAX_SHIFT):
+    """
+    Hard material was hit at `pos` — return a new point within ±max_shift %
+    on both axes, still respecting MIN_X_GAP against the other sample points.
+    """
+    prev_points = prev_points or []
+
+    # Keep the retry inside this area's slot
+    x_lo = max(X_MIN, pos["x"] - max_shift)
+    x_hi = min(X_MAX - (TOTAL_CYCLES - pos["area"]) * MIN_X_GAP, pos["x"] + max_shift)
+    others = [p["x"] for p in prev_points if p["area"] != pos["area"]]
+    for ox in others:
+        if ox < pos["x"]:
+            x_lo = max(x_lo, ox + MIN_X_GAP)
+        else:
+            x_hi = min(x_hi, ox - MIN_X_GAP)
+    if x_lo > x_hi:
+        x_lo = x_hi = pos["x"]        # no room to shift X — move Y only
+
+    y_lo = max(Y_MIN, pos["y"] - max_shift)
+    y_hi = min(Y_MAX, pos["y"] + max_shift)
+
+    for _ in range(10):
+        nx = random.randint(int(x_lo), int(x_hi))
+        ny = random.randint(int(y_lo), int(y_hi))
+        if (nx, ny) != (pos["x"], pos["y"]):
+            return {"x": nx, "y": ny, "area": pos["area"]}
+
+    return {"x": int(x_lo), "y": int(y_hi), "area": pos["area"]}
+
 
 # ── State machine ─────────────────────────────────────────────────────────────
 class State(Enum):
@@ -545,7 +582,9 @@ class Manager:
         # Force the next positioning move to go via HOME (used for cycle 1 and
         # after errors/timeouts so the auger recovers from a known reference)
         self._force_home_next = True
-        
+        self._hard_retry_pos = None   # nearby point to use on the next CYCLE_POSITION pass (hard-material retry)
+        self._hard_retries   = 0      # consecutive hard-material hits for the CURRENT cycle number
+
         # Auger position confirmation tracking
         self._confirmation_loop_count = 0
         self._confirmation_results = []
@@ -1055,21 +1094,34 @@ class Manager:
             print(f"[MANAGER] All {TOTAL_CYCLES} cycles completed.")
             logger.debug(f"All {TOTAL_CYCLES} cycles completed.")
             self._goto(State.SAMPLE_COLLECTION)
-        
-        # Get sample positions
-        areas = [p["area"] for p in self.positions]
-        target_area = get_sample_positions(used_areas=areas, prev_points=self.positions)
-        if target_area is not None: self.positions.append(target_area)
+
+        # NEW: hard-material retry — reuse the pre-computed NEARBY point
+        # (≤10% shift on X/Y from the failed point) instead of generating a
+        # brand-new area position.
+        is_hard_retry = self._hard_retry_pos is not None
+        if is_hard_retry:
+            self.positions.append(self._hard_retry_pos)
+            self._hard_retry_pos = None
+            print(f"[MANAGER] HARD-MATERIAL RETRY — using nearby point {self.positions[-1]}")
+            logger.debug(f"Hard-material retry — using nearby point {self.positions[-1]}")
         else:
-            target_area = get_sample_positions([], [])
-            self.positions.append(target_area)
+            # Get sample positions (original behaviour)
+            areas = [p["area"] for p in self.positions]
+            target_area = get_sample_positions(used_areas=areas, prev_points=self.positions)
+            if target_area is not None: self.positions.append(target_area)
+            else:
+                target_area = get_sample_positions([], [])
+                self.positions.append(target_area)
 
         pos = self.positions[self._current_sample_index]
 
         # NEW PROCESS: cycles 2 & 3 travel DIRECTLY from the previous position
         # (no homing in between). Cycle 1 — or any retry after an error /
         # timeout — goes via home so the auger starts from a known reference.
-        direct = (self._successful_cycles > 0) and (not self._force_home_next)
+        # NEW: a hard-material retry also goes DIRECT (even on cycle 1),
+        # because the Z cycle finished normally so the tracked position is
+        # still trusted — the auger just slides ≤10% over.
+        direct = ((self._successful_cycles > 0) or is_hard_retry) and (not self._force_home_next)
         self._force_home_next = False
 
         self._sampler(action="sample_cycle", x=pos["x"], y=pos["y"], direct=direct)
@@ -1134,12 +1186,12 @@ class Manager:
             print("[MANAGER] Cycle start given and recieved !!")
             self._sampler(action="check_sample_cycle_complete")
             time.sleep(1)
-            self._cam(action="cam3_single", path=self.paths[f"SAMPLE_{self.cycle}_IMG_PATH"])
 
+        self._cam(action="cam3_single", path=self.paths[f"SAMPLE_{self.cycle}_IMG_PATH"])
         self._goto(State.CYCLE_DONE)
 
     def _handle_cycle_done(self):
-        time.sleep(1)  # PLC now PUSHES sample_cycle_complete — poll fast to catch it
+        time.sleep(1)  # PLC now PUSHES sample_cycle_complete / hard_material_detected — poll fast to catch it
 
         msg = self._pop("plc_sampler/status")
         if msg and msg.get("status") == "emergency_stop":
@@ -1150,15 +1202,16 @@ class Manager:
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
-        
+
         if msg and msg.get("status", "") == "sample_cycle_complete":
-            
+
             # Completion is detected on the sampler side via Z_UP FB 1 -> 0 -> 1
             print(f"[MANAGER] Cycle {self.cycle} completed (Z_UP FB 1->0->1)")
             logger.debug(f"Cycle {self.cycle} completed (Z_UP FB 1->0->1)")
             self._successful_cycles += 1
             self._current_sample_index += 1
-            
+            self._hard_retries = 0          # NEW: good sample — clear hard-retry counter
+
             if self._successful_cycles >= TOTAL_CYCLES:
                 self._barrier(action="green_signal")
                 time.sleep(1)
@@ -1171,12 +1224,42 @@ class Manager:
                 print(f"[MANAGER] Moving DIRECTLY to next sampling position (no homing) ")
                 self._goto(State.CYCLE_POSITION)
 
+        # ── NEW: HARD MATERIAL — Z came back up (z_up=1) WITH hard material=1 ──
+        elif msg and msg.get("status", "") == "hard_material_detected":
+
+            self._hard_retries += 1
+            bad = self.positions.pop()   # discard the failed point — cycle NOT counted,
+                                         # _successful_cycles / _current_sample_index untouched
+            print(f"[MANAGER] HARD MATERIAL at {bad} — cycle {self.cycle} NOT counted "
+                  f"(retry {self._hard_retries}/{HARD_MATERIAL_MAX_RETRIES})")
+            logger.warning(f"Hard material at {bad} — cycle not counted (retry {self._hard_retries}/{HARD_MATERIAL_MAX_RETRIES})")
+
+            if self._hard_retries <= HARD_MATERIAL_MAX_RETRIES:
+                # Get another X,Y NEARBY — not more than 10% shift on X and Y.
+                # Z is back up and the move completed normally, so the tracked
+                # position is still valid — the retry travels DIRECT (no homing).
+                self._hard_retry_pos = get_nearby_position(bad, prev_points=self.positions)
+                print(f"[MANAGER] Retrying at nearby point {self._hard_retry_pos}")
+                logger.debug(f"Retrying at nearby point {self._hard_retry_pos}")
+            else:
+                # Whole neighbourhood seems hard — abandon it, pick a fresh
+                # area through the normal generator, and recover via home.
+                print("[MANAGER] Too many hard-material hits — picking a FRESH area via home")
+                logger.warning("Too many hard-material hits — picking a fresh area via home")
+                self._hard_retries   = 0
+                self._hard_retry_pos = None
+                self._force_home_next = True
+
+            self._goto(State.CYCLE_POSITION)
+            return
+
         elif msg and msg.get("status", "") == "cycle_error":
             print(f"[MANAGER] Cycle error: {msg.get('msg')}")
             print("[MANAGER] Retrying with different position ")
             self.positions.pop()
             self._force_home_next = True   # Recover via home — position not trusted
             self._goto(State.CYCLE_POSITION)
+
         if self._elapsed() > SAMPLE_CYCLE_TIMEOUT:
             print("[MANAGER] Cycle timeout — moving to next position")
             self.positions.pop()
@@ -1184,6 +1267,8 @@ class Manager:
             self._goto(State.CYCLE_POSITION)
         else:
             print("[MANAGER] Cycle in progress — waiting ")
+            # Polls the sampler — the reply continues with ONE of:
+            #   sample_cycle_complete | hard_material_detected | sample_cycle_not_complete
             self._sampler(action="check_sample_cycle_complete")
             time.sleep(2)
             
@@ -1275,7 +1360,7 @@ class Manager:
         self._barrier(action="green_signal")
         time.sleep(2)
         self._goto(State.COMPLETE)
-        
+
     def _handle_complete(self):
         print(f"[MANAGER] Session {self.uid} complete.")
         try:
@@ -1290,16 +1375,16 @@ class Manager:
                 "paths": self.paths,
                 "bucket_no": self.bucket_no
             }
-
+ 
             generate_sampling_report(report_data)
             compress_pdf(report_data["pdf_path"])
         except Exception as e: 
             print(f"[MANAGER] Error (generate_sampling_report) - {e}")
             logger.error(f"{traceback.format_exc()}")
-
+ 
         db_complete_log(self.uid)
         time.sleep(5)
-
+ 
         self._printer(action="stop")
         self._sampler(action="reset")
         self._barrier(action="reset")

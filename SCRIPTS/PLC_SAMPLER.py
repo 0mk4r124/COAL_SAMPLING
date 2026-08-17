@@ -29,6 +29,7 @@ EMERGENCY_STOP = 14
 AUTO_MANUAL = 16
 CYCLE_COMPLETE = 18
 CYCLE_STATUS = 20
+MATERIAL_HARD_STATUS = 22   # NEW: DB24.22 — 1 = hard material hit during this cycle
 
 # OUTPUT OFFSETS
 CYCLE_START = 0
@@ -69,6 +70,12 @@ class SamplerController:
         # (instead of waiting for the manager's next poll)
         self._z_complete_published = False
 
+        # NEW: latched True if MATERIAL_HARD_STATUS goes 1 at any point while
+        # the cycle is armed. Decides which status is published on completion:
+        #   False -> "sample_cycle_complete"     (cycle counted)
+        #   True  -> "hard_material_detected"    (cycle NOT counted, retry nearby)
+        self._hard_material = False
+
         # Drive X and Y at the same time during positioning (much faster than
         # sequential Y-then-X). Set False to fall back to sequential moves.
         self.simultaneous_xy = True
@@ -89,6 +96,7 @@ class SamplerController:
     def check_emergency(self):
         """
         Read the LIVE emergency bit (1 = normal, 0 = emergency).
+
         Used by the manager to verify actual emergency state instead of
         relying on possibly-stale queued MQTT messages.
         """
@@ -108,14 +116,34 @@ class SamplerController:
         """Arm the Z-UP FB watcher. Called right after CYCLE_START is pulsed."""
         self._z_phase = "armed"
         self._z_complete_published = False
+        self._hard_material = False   # NEW: fresh cycle — clear hard-material latch
         print("[PLC_SAMPLER] Z-cycle armed — waiting for Z_UP FB 1 -> 0 -> 1")
         logger.debug("Z-cycle armed — waiting for Z_UP FB 1 -> 0 -> 1")
+
+    def check_hard_material(self):
+        """
+        NEW: Read the live MATERIAL_HARD_STATUS bit (DB24.22).
+        Returns 1 if the PLC reports hard material, else 0.
+        A failed read returns 0 so a comms glitch never stalls the cycle.
+        """
+        try:
+            hard = self.plc.readIntFromPLC(self.client, MATERIAL_HARD_STATUS)
+            return 1 if (hard == 1 or hard == "1") else 0
+        except Exception as e:
+            print(f"[PLC_SAMPLER] check_hard_material read error: {e}")
+            logger.error(f"{traceback.format_exc()}")
+            return 0
 
     def update_z_cycle(self):
         """
         Poll Z_UP_SENSOR_FB and advance the phase machine.
         Called on every iteration of run() so the DOWN (0) state is never
         missed between the manager's status polls.
+
+        NEW: MATERIAL_HARD_STATUS is polled in the SAME loop. If it goes 1
+        at any point while the cycle is armed, the cycle is latched as a
+        hard-material cycle — on completion (Z back up) the sampler publishes
+        "hard_material_detected" instead of "sample_cycle_complete".
         """
         if self._z_phase in ("idle", "complete"):
             return
@@ -127,6 +155,14 @@ class SamplerController:
             logger.error(f"{traceback.format_exc()}")
             return
 
+        # NEW: latch hard material any time the bit goes high during the cycle.
+        # Latching (instead of a single read at the end) means a short pulse
+        # from the PLC can't be missed by the 0.5 s poll loop.
+        if not self._hard_material and self.check_hard_material() == 1:
+            self._hard_material = True
+            print("[PLC_SAMPLER] MATERIAL_HARD_STATUS = 1 — hard material latched for this cycle")
+            logger.warning("MATERIAL_HARD_STATUS = 1 — hard material latched for this cycle")
+
         if self._z_phase == "armed" and z_up == 0:
             self._z_phase = "down_seen"
             print("[PLC_SAMPLER] Z_UP FB went 1 -> 0 (auger down)")
@@ -134,18 +170,25 @@ class SamplerController:
 
         elif self._z_phase == "down_seen" and z_up == 1:
             self._z_phase = "complete"
-            print("[PLC_SAMPLER] Z_UP FB went 0 -> 1 (auger back up) — cycle COMPLETE")
-            logger.debug("Z_UP FB went 0 -> 1 — cycle COMPLETE")
+            if self._hard_material:
+                # User condition: hard material == 1 AND z up == 1 -> invalid cycle
+                print("[PLC_SAMPLER] Z_UP FB went 0 -> 1 WITH hard material — cycle INVALID (retry nearby)")
+                logger.warning("Z_UP FB 0 -> 1 with MATERIAL_HARD_STATUS=1 — cycle invalid, retry nearby")
+            else:
+                print("[PLC_SAMPLER] Z_UP FB went 0 -> 1 (auger back up) — cycle COMPLETE")
+                logger.debug("Z_UP FB went 0 -> 1 — cycle COMPLETE")
 
     def check_sample_cycle_complete(self):
         """
         Cycle is complete when the Z-UP FB has gone 1 -> 0 -> 1 since the
         cycle start was given (instead of the old CYCLE_STATUS tag).
+        NOTE: "complete" here only means the Z motion finished — whether the
+        sample COUNTS is decided by self._hard_material (see run()).
         """
         try:
             self.update_z_cycle()
-            print(f"[PLC_SAMPLER] Z-cycle phase: {self._z_phase}")
-            logger.debug(f"Z-cycle phase: {self._z_phase}")
+            print(f"[PLC_SAMPLER] Z-cycle phase: {self._z_phase}  hard_material={self._hard_material}")
+            logger.debug(f"Z-cycle phase: {self._z_phase}  hard_material={self._hard_material}")
         except Exception as e:
             print(f"[PLC_SAMPLER] check_sample_cycle_complete error: {e}")
             logger.error(f"{traceback.format_exc()}")
@@ -492,7 +535,8 @@ class SamplerController:
                                             (old behaviour — used for cycle 1).
         direct=True  and position known:    move RELATIVE from the current
                                             position WITHOUT homing
-                                            (new behaviour — cycles 2 & 3).
+                                            (new behaviour — cycles 2 & 3 and
+                                             hard-material nearby retries).
 
         Sign convention (seconds of travel measured from home):
             +dX -> move_x_reverse   |  -dX -> move_x_forward
@@ -569,7 +613,8 @@ class SamplerController:
             self.plc.writeIntToPLC(self.client, HEARTBIT, 0)
             print(f"[PLC_SAMPLER] Cycle {cycle} initiated.")
 
-            # Arm the Z-UP FB watcher: cycle completes when Z goes 1 -> 0 -> 1
+            # Arm the Z-UP FB watcher: cycle completes when Z goes 1 -> 0 -> 1.
+            # This also clears the hard-material latch for the new cycle.
             self.arm_z_cycle()
 
         except Exception as e:
@@ -594,6 +639,7 @@ class SamplerController:
             self.current_x_time = None
             self.current_y_time = None
             self._z_phase = "idle"
+            self._hard_material = False   # NEW: clear latch
 
         except Exception as e:
             msg = f"Cycle stop error: {e}"
@@ -629,6 +675,7 @@ class SamplerController:
             self.current_x_time = None
             self.current_y_time = None
             self._z_phase = "idle"
+            self._hard_material = False   # NEW: clear latch
 
             self.mqtt.publish(TOPIC_OUT, {"status": "reset_done"})
             print("[PLC_SAMPLER] PLC reset complete.")
@@ -738,8 +785,16 @@ class SamplerController:
                     else:
                         self.mqtt.publish(TOPIC_OUT, {"status": "emergency_stop"})
                 elif action == "check_sample_cycle_complete":
+                    # NEW: while waiting for cycle complete the manager polls
+                    # here — the reply continues with ONE of the two statuses:
+                    #   Z 1->0->1, hard=0 -> sample_cycle_complete
+                    #   Z 1->0->1, hard=1 -> hard_material_detected
+                    #   Z not back yet    -> sample_cycle_not_complete
                     if self.check_sample_cycle_complete():
-                        self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
+                        if self._hard_material:
+                            self.mqtt.publish(TOPIC_OUT, {"status": "hard_material_detected"})
+                        else:
+                            self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
                     else:
                         self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_not_complete"})
                 elif action == "check_all_samples_status":
@@ -753,16 +808,24 @@ class SamplerController:
                     self.reset()
 
             # Keep the Z-UP FB watcher running on every loop pass (~0.5 s)
-            # so the 1 -> 0 dip is caught even between manager polls.
+            # so the 1 -> 0 dip AND the MATERIAL_HARD_STATUS bit are caught
+            # even between manager polls.
             self.update_z_cycle()
 
             # PUSH completion to the manager the moment Z comes back up —
             # removes the ~10 s poll-detection lag per cycle.
+            # NEW: continues with exactly ONE of the two statuses depending on
+            # whether hard material was detected during the cycle.
             if self._z_phase == "complete" and not self._z_complete_published:
                 self._z_complete_published = True
-                self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
-                print("[PLC_SAMPLER] sample_cycle_complete pushed to manager")
-                logger.debug("sample_cycle_complete pushed to manager")
+                if self._hard_material:
+                    self.mqtt.publish(TOPIC_OUT, {"status": "hard_material_detected"})
+                    print("[PLC_SAMPLER] hard_material_detected pushed to manager")
+                    logger.warning("hard_material_detected pushed to manager")
+                else:
+                    self.mqtt.publish(TOPIC_OUT, {"status": "sample_cycle_complete"})
+                    print("[PLC_SAMPLER] sample_cycle_complete pushed to manager")
+                    logger.debug("sample_cycle_complete pushed to manager")
 
             self._emergency_state_last = self.plc.readIntFromPLC(self.client, EMERGENCY_STOP)
             if self._emergency_state_last == 0:
@@ -776,7 +839,7 @@ class SamplerController:
             time.sleep(0.5)
 
 def main():
-    total_x = 28
+    total_x = 33
     total_y = 13
 
     while True:

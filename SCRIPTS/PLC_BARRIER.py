@@ -197,7 +197,7 @@ class BarrierController:
                 bucket_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_COUNT_READ)
                 print(f"[PLC_BARRIER] bucket_bit {bucket_bit} ")
                 if bucket_bit == bucket_number: 
-                    self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 0)
+                    # self.plc.writeIntToPLC(self.client, TRUN_TABLE_COUNT, 0)
                     logger.debug(f"0 - TRUN_TABLE_COUNT")
                     self.mqtt.publish(TOPIC_OUT, {"status": "bucket_set"})
                     break
@@ -255,6 +255,8 @@ class BarrierController:
             if not self.plc.writeIntToPLC(self.client, HEARTBIT, 0): break
 
             data = self.mqtt.data
+            # bucket_bit = self.plc.readIntFromPLC(self.client, TRUN_TABLE_COUNT_READ)
+            # print(f"BUCKET BIT == {bucket_bit}")
 
             if data and data.get("_consumed") is not True:
                 action    = data.get("action", "")
