@@ -33,6 +33,8 @@ import pymysql
 
 from DEPENDANT.EMAIL_ALERTS import send_new_vehicle_alert, send_vendor_mismatch_alert
 from DEPENDANT.PDF_UTILS import create_and_upload_vehicle_pdf, _db_connect
+from DEPENDANT.BLOB_NAMING import blob_url_for
+from DEPENDANT.PDF_UPLOAD_WORKER import enqueue_upload
 
 logger = logging.getLogger(__name__)
 
@@ -139,16 +141,26 @@ def resolve_pdf_url(vehicle: dict, uid: str, vehicle_img_path: str = None) -> st
                 _save_pdf_url(rfid, old_url)   # inherit so future arrivals hit case (a)
             return old_url
 
-        # (c) Genuinely new vehicle -> create + upload PDF now (a few seconds)
-        logger.info(f"[HOOKS] No PDF for {vehicle_number} - creating and uploading now")
-        url = create_and_upload_vehicle_pdf({
+        # (c) Genuinely new vehicle:
+        #     Compute the FINAL url instantly (deterministic) and hand it to the
+        #     printer now. The actual encrypt+upload runs in the background and
+        #     retries for up to 1 day; if it never succeeds the vehicle is
+        #     marked unsynced. No 30-40s wait, no cycle blocking.
+        url = blob_url_for(vehicle_number)
+        logger.info(f"[HOOKS] No PDF for {vehicle_number} - url ready instantly, "
+                    f"upload queued in background -> {url}")
+
+        # Save url now so future arrivals hit case (a). IS_PDF_SYNCED stays 0
+        # until the worker confirms the blob is actually up.
+        if rfid:
+            _save_pdf_url(rfid, url)
+
+        enqueue_upload({
             "VEHICLE_NUMBER": vehicle_number,
             "VENDOR_CODE":    vendor_code,
             "VENDER_NAME":    vehicle.get("VENDER_NAME") or "",
             "RFID":           rfid,
         })
-        if rfid:
-            _save_pdf_url(rfid, url)
         return url
 
     except Exception:

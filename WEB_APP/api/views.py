@@ -62,6 +62,67 @@ def parse_last_ping(value):
         return dt.strftime("%d-%m-%Y %I:%M%p")
     except ValueError:
         return None
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WEB_APP/api/views.py  —  PRINT ENDPOINTS (replace the existing versions)
+#
+# Why this changed:
+#   PRINTER.py reads  msg.get("pdf_url")  and  msg.get("dtstamp").
+#   The old web endpoints published  vehicle_number / vendor_name / dtstamp
+#   and NO pdf_url — so every browser-triggered print reached the board with
+#   Eth_0 = ""  (blank QR code), while MAIN_MANAGER's jobs were fine.
+#
+#   The dtstamp format also differed:
+#       MAIN_MANAGER : 20260819102918      (%Y%m%d%H%M%S)
+#       WEB_APP      : 19/08/2026 09:54    (%d/%m/%Y %H:%M)  <- the "spaces"
+#   Both are now normalised to %Y%m%d%H%M%S.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+
+# from .models import VEHICLE_MASTER, VENDOR_MASTER, VEHICLE_LOGS
+# from DEPENDANT.MQTT import MQTT
+# from .utils import build_rfid_key
+# (keep whatever imports the file already has — nothing new is required)
+
+PRINT_DT_FORMAT = "%Y%m%d%H%M%S"
+
+
+def _fmt_dtstamp(value=None) -> str:
+    """Always return a space-free YYYYMMDDHHMMSS stamp."""
+    if isinstance(value, datetime):
+        return value.strftime(PRINT_DT_FORMAT)
+    text = (value or "").strip()
+    if not text:
+        return datetime.now().strftime(PRINT_DT_FORMAT)
+    for fmt in (PRINT_DT_FORMAT, "%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt).strftime(PRINT_DT_FORMAT)
+        except ValueError:
+            continue
+    return "".join(text.split())
+
+
+def _lookup_pdf_url(vehicle_number: str = "", rfid_key: str = "") -> str:
+    """
+    Find the secured PDF link for a vehicle. Tries the exact RFID row first
+    (that is how MAIN_MANAGER resolves it), then falls back to any row with
+    the same vehicle number that already has a PDF.
+    """
+    if rfid_key:
+        row = VEHICLE_MASTER.objects.filter(rfid=rfid_key).exclude(pdf_url__isnull=True)\
+                                    .exclude(pdf_url="").first()
+        if row and row.pdf_url:
+            return row.pdf_url.strip()
+
+    if vehicle_number:
+        row = VEHICLE_MASTER.objects.filter(vehicle_number=vehicle_number)\
+                                    .exclude(pdf_url__isnull=True).exclude(pdf_url="")\
+                                    .order_by("id").first()
+        if row and row.pdf_url:
+            return row.pdf_url.strip()
+
+    return ""
     
 @method_decorator([login_required], name='dispatch') # password_expiry_required
 class APIDashboardView(TemplateView):
@@ -642,46 +703,6 @@ def get_current_status(request):
         }, status=500)
 
 @csrf_exempt
-def print_current_vehicle(request):
-    """Send print job for the currently active IN_PROGRESS vehicle."""
-    if request.method != "POST":
-        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
-    try:
-        current_vehicle = VEHICLE_LOGS.objects.filter(status="IN_PROGRESS").first()
-        if not current_vehicle:
-            return JsonResponse({"success": False, "error": "No vehicle currently in progress"}, status=404)
-
-        rfid_key   = build_rfid_key(current_vehicle.rfids, current_vehicle.uid)
-        vehicle_obj = VEHICLE_MASTER.objects.filter(rfid=rfid_key).first()
-        vendor_obj  = None
-        if vehicle_obj:
-            vendor_obj = VENDOR_MASTER.objects.filter(vendor_code=vehicle_obj.vendor_code).first()
-
-        vehicle_number = vehicle_obj.vehicle_number if vehicle_obj else current_vehicle.uid
-        vendor_name    = vendor_obj.vendor_name if vendor_obj else ""
-        dtstamp        = current_vehicle.create_time.strftime("%d/%m/%Y %H:%M") if current_vehicle.create_time else ""
-
-        mqtt = MQTT("MANAGER_PRINT")
-        mqtt.publish("manager/printer", {
-            "action":         "send_data",
-            "vehicle_number": vehicle_number,
-            "vendor_name":    vendor_name,
-            "dtstamp":        dtstamp,
-        })
-
-        return JsonResponse({
-            "success":        True,
-            "message":        "Print job sent",
-            "vehicle_number": vehicle_number,
-            "vendor_name":    vendor_name,
-            "dtstamp":        dtstamp,
-        })
-
-    except Exception as e:
-        print(f"[ERROR] print_current_vehicle: {e}")
-        return JsonResponse({"success": False, "error": str(e)}, status=500)
-
-@csrf_exempt
 def stop_print_job(request):
     """Publish stop command to PRINTER service via MQTT."""
     if request.method != "POST":
@@ -738,12 +759,24 @@ def send_print_data(request):
     try:
         data = json.loads(request.body)
 
-        vehicle_number = data.get("vehicle_number", "")
-        vendor_name    = data.get("vendor_name", "")
-        dtstamp        = data.get("dtstamp", "")
+        vehicle_number = (data.get("vehicle_number") or "").strip()
+        vendor_name    = (data.get("vendor_name") or "").strip()
+        dtstamp        = _fmt_dtstamp(data.get("dtstamp"))
+        pdf_url        = (data.get("pdf_url") or "").strip()
 
         if not vehicle_number:
             return JsonResponse({"success": False, "error": "vehicle_number is required"}, status=400)
+
+        # Resolve the secured PDF link — never publish a blank one.
+        if not pdf_url:
+            pdf_url = _lookup_pdf_url(vehicle_number=vehicle_number)
+
+        if not pdf_url:
+            return JsonResponse({
+                "success": False,
+                "error": f"No PDF link found for {vehicle_number}. "
+                         f"Run the PDF sync for this vehicle before printing.",
+            }, status=409)
 
         mqtt = MQTT("MANAGER_PRINT")
         mqtt.publish("manager/printer", {
@@ -751,14 +784,72 @@ def send_print_data(request):
             "vehicle_number": vehicle_number,
             "vendor_name":    vendor_name,
             "dtstamp":        dtstamp,
+            "pdf_url":        pdf_url,      # <-- the field PRINTER.py actually reads
         })
 
-        return JsonResponse({"success": True, "message": "Print job sent"})
+        return JsonResponse({
+            "success": True,
+            "message": "Print job sent",
+            "dtstamp": dtstamp,
+            "pdf_url": pdf_url,
+        })
 
     except Exception as e:
         print(f"[ERROR] send_print_data: {e}")
         return JsonResponse({"success": False, "error": str(e)}, status=500)
 
+@csrf_exempt
+def print_current_vehicle(request):
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+    try:
+        current_vehicle = VEHICLE_LOGS.objects.filter(status="IN_PROGRESS").first()
+        if not current_vehicle:
+            return JsonResponse({"success": False, "error": "No vehicle currently in progress"}, status=404)
+
+        rfid_key    = build_rfid_key(current_vehicle.rfids, current_vehicle.uid)
+        vehicle_obj = VEHICLE_MASTER.objects.filter(rfid=rfid_key).first()
+        vendor_obj  = None
+        if vehicle_obj:
+            vendor_obj = VENDOR_MASTER.objects.filter(vendor_code=vehicle_obj.vendor_code).first()
+
+        vehicle_number = vehicle_obj.vehicle_number if vehicle_obj else current_vehicle.uid
+        vendor_name    = vendor_obj.vendor_name if vendor_obj else ""
+        dtstamp        = _fmt_dtstamp(current_vehicle.create_time)
+
+        pdf_url = (vehicle_obj.pdf_url or "").strip() if vehicle_obj else ""
+        if not pdf_url:
+            pdf_url = _lookup_pdf_url(vehicle_number=vehicle_number, rfid_key=rfid_key)
+
+        if not pdf_url:
+            return JsonResponse({
+                "success": False,
+                "error": f"No PDF link stored for {vehicle_number} — nothing printed.",
+                "vehicle_number": vehicle_number,
+            }, status=409)
+
+        mqtt = MQTT("MANAGER_PRINT")
+        mqtt.publish("manager/printer", {
+            "action":         "send_data",
+            "vehicle_number": vehicle_number,
+            "vendor_name":    vendor_name,
+            "dtstamp":        dtstamp,
+            "pdf_url":        pdf_url,
+        })
+
+        return JsonResponse({
+            "success":        True,
+            "message":        "Print job sent",
+            "vehicle_number": vehicle_number,
+            "vendor_name":    vendor_name,
+            "dtstamp":        dtstamp,
+            "pdf_url":        pdf_url,
+        })
+
+    except Exception as e:
+        print(f"[ERROR] print_current_vehicle: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
+    
 @csrf_exempt
 def reset_system(request):
     if request.method != "POST":

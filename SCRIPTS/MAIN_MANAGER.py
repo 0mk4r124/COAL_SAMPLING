@@ -52,7 +52,9 @@ TOTAL_CYCLES    = 3
 HOME_POSITION_TIMEOUT = 200 # Wait up to x seconds for auger to return to home position before aborting
 SAMPLE_CYCLE_TIMEOUT = 600
 POSITION_CONFIRMATION_TIMEOUT = 300
-CLOSE_CYCLE_WAIT_TIME = int(60*2) # Wait 2 minutes after all 3 cycles complete before writing cycle stop
+CLOSE_CYCLE_WAIT_TIME = 45    # Wait 0.45 minute AFTER auger is home + CYCLE_COMPLETE=1, then cycle stop
+FINAL_HOME_TIMEOUT    = 120   # Max wait for the auger to come home by itself after the last cycle
+HOME_POLL_SEC         = 2     # How often to poll the home FBs / CYCLE_COMPLETE tag
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 MOVEMENT_DURATION = 2 # Duration to move in each direction during auger position confirmation loops (in seconds)
 HARD_RETRY_MAX_SHIFT      = 10  # Max % offset on X and Y for the nearby retry point (user spec: not more than 10%)
@@ -569,6 +571,9 @@ class Manager:
         self._state_entered_at: float = time.time()
         self._db_last_polled  : float = 0.0
         self._new_vehicle_mail_sent = False
+        self._final_home_confirmed = False   # auger home + CYCLE_COMPLETE=1 seen
+        self._final_home_at        = 0.0     # timestamp that happened
+        self._last_home_poll       = 0.0     # last check_home_status poll
         
         # AI Model initialization
         if initialize_ai_model():
@@ -628,6 +633,11 @@ class Manager:
         logger.info(f"State: {self.state.name} --> {new_state.name} -- {self._elapsed():.1f}s")
         self.state             = new_state
         self._state_entered_at = time.time()
+
+        if new_state == State.SAMPLE_COLLECTION:
+            self._final_home_confirmed = False
+            self._final_home_at        = 0.0
+            self._last_home_poll       = 0.0
         
         # Update database with new state
         if self.uid:
@@ -920,7 +930,7 @@ class Manager:
         print("[MANAGER] Sending open barrier command ")
         self._cam(action="cam2_single", path=self.paths["VEHICLE_IMG_PATH"])
         self._barrier(action="open_barrier")
-        self._cam(action="sample_capture_start", uid=self.uid)
+        # self._cam(action="sample_capture_start", uid=self.uid)
         time.sleep(1)
         
         self._goto(State.BARRIER_OPENING)
@@ -1094,6 +1104,7 @@ class Manager:
             print(f"[MANAGER] All {TOTAL_CYCLES} cycles completed.")
             logger.debug(f"All {TOTAL_CYCLES} cycles completed.")
             self._goto(State.SAMPLE_COLLECTION)
+            return
 
         # NEW: hard-material retry — reuse the pre-computed NEARBY point
         # (≤10% shift on X/Y from the failed point) instead of generating a
@@ -1273,8 +1284,8 @@ class Manager:
             time.sleep(2)
             
     def _handle_all_samples_collection(self):
+        # ── Barrier chatter ───────────────────────────────────────────────────
         msg = self._pop("plc_barrier/status")
-        
         if msg and msg.get("status") == "red_sent":
             print("[MANAGER] Red signal confirmed.")
             logger.debug("Red signal confirmed.")
@@ -1284,23 +1295,58 @@ class Manager:
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
             logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
-            self._flush_topic("plc_sampler/status")  # drop stale queued messages
+            self._flush_topic("plc_sampler/status")
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
 
-        # NEW PROCESS: all 3 Z-cycles are complete — the old CYCLE_COMPLETE tag
-        # can't be trusted since the auger never homed between cycles.
-        # Wait 1 minute, then write CYCLE_STOP.
-        print(f"[MANAGER] All cycles complete — waiting {CLOSE_CYCLE_WAIT_TIME}s before Cycle Stop.")
-        logger.debug(f"All cycles complete — waiting {CLOSE_CYCLE_WAIT_TIME}s before Cycle Stop.")
+        # ── STEP 1: PASSIVELY wait for the auger to reach home ────────────────
+        # The PLC drives it home on its own after the 3rd cycle — no move_home
+        # is sent from here. Home is confirmed by the FBs, and CYCLE_COMPLETE
+        # (DB24.18 = 1) confirms the PLC considers all 3 cycles finished.
+        if not self._final_home_confirmed:
 
-        now = time.time()
-        while (time.time() - now) < CLOSE_CYCLE_WAIT_TIME:
+            if msg and msg.get("status") == "auger_at_home":
+                if int(msg.get("cycle_complete", 0)) == 1:
+                    self._final_home_confirmed = True
+                    self._final_home_at        = time.time()
+                    print(f"[MANAGER] Auger HOME + CYCLE_COMPLETE=1 — Cycle Stop in {CLOSE_CYCLE_WAIT_TIME}s.")
+                    logger.debug(f"Auger home + CYCLE_COMPLETE=1 after {self._elapsed():.1f}s — "
+                                 f"waiting {CLOSE_CYCLE_WAIT_TIME}s before cycle stop.")
+                    return
+                else:
+                    print("[MANAGER] Auger at home — waiting for CYCLE_COMPLETE (DB24.20) = 1")
+                    logger.debug("Auger at home, CYCLE_COMPLETE still 0 — polling")
+
+            elif msg and msg.get("status") == "auger_not_home":
+                print(f"[MANAGER] Auger returning home on its own ({self._elapsed():.0f}s)")
+
+            if self._elapsed() > FINAL_HOME_TIMEOUT:
+                # Never strand the vehicle — write Cycle Stop even without
+                # home / CYCLE_COMPLETE confirmation.
+                print("[MANAGER] Home / CYCLE_COMPLETE timeout — proceeding to Cycle Stop anyway.")
+                logger.warning("Home or CYCLE_COMPLETE not confirmed within timeout — proceeding to cycle stop.")
+                self._final_home_confirmed = True
+                self._final_home_at        = time.time()
+                return
+
+            if time.time() - self._last_home_poll > HOME_POLL_SEC:
+                self._sampler(action="check_home_status")
+                self._last_home_poll = time.time()
+
+            time.sleep(0.5)
+            return
+
+        # ── STEP 2: home reached — wait 1 minute, then write CYCLE_STOP ────────
+        waited = time.time() - self._final_home_at
+        if waited < CLOSE_CYCLE_WAIT_TIME:
+            print(f"[MANAGER] Cycle Stop in {CLOSE_CYCLE_WAIT_TIME - waited:.0f}s")
             time.sleep(5)
-            print("[MANAGER] Waiting for Cycle Stop.")
+            return
 
+        print("[MANAGER] Wait elapsed — writing Cycle Stop.")
+        logger.debug("Auger home + 1 min elapsed — writing cycle stop.")
         self._sampler(action="sample_cycle_stop")
         self._goto(State.COMPLETE_FINAL)
 
@@ -1346,7 +1392,7 @@ class Manager:
 
     def _handle_complete_final(self):
         msg = self._pop("plc_sampler/status")
-        self._cam(action="sample_capture_stop", uid=self.uid)
+        # self._cam(action="sample_capture_stop", uid=self.uid)
 
         if msg and msg.get("status") == "sample_cycle_stop_comp": 
             print(f"[MANAGER] Sampling complete — generating QR code ")
@@ -1419,6 +1465,9 @@ class Manager:
         self._successful_cycles = 0
         self._force_home_next = True
         self._new_vehicle_mail_sent = False
+        self._final_home_confirmed = False   # auger home + CYCLE_COMPLETE=1 seen
+        self._final_home_at        = 0.0     # timestamp that happened
+        self._last_home_poll       = 0.0     # last check_home_status poll
         self._goto(State.IDLE)
         print("[MANAGER] Ready for next vehicle")
 

@@ -93,8 +93,8 @@ def upload_pdf_to_container(local_pdf_path: str, vehicle_number: str) -> str:
     if not local_pdf_path or not os.path.exists(local_pdf_path):
         raise FileNotFoundError(f"PDF not found: {local_pdf_path}")
 
-    safe_name = "".join(c for c in str(vehicle_number) if c.isalnum() or c in ("-", "_"))
-    blob_name = f"{PDF_BLOB_PREFIX}/{safe_name}.pdf"
+    from DEPENDANT.BLOB_NAMING import blob_name_for
+    blob_name = blob_name_for(vehicle_number)
 
     blob_client = _get_container_client().get_blob_client(blob_name)
     with open(local_pdf_path, "rb") as f:

@@ -24,7 +24,7 @@ BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PROD
 
 SYNC_INTERVAL = 600  # 10 minutes
 BATCH_SIZE = 5
-SYNC_TRAINING_DATA = True
+SYNC_TRAINING_DATA = False
 # ==========================================
 
 
@@ -247,17 +247,17 @@ def run_uptime_sync():
 if __name__ == "__main__":
     threads = []
 
-    # t1 = threading.Thread(target=run_uptime_sync, name="UptimeSyncThread", daemon=True)
-    # t2 = threading.Thread(target=run_sync, name="SyncThread", daemon=True)
-    # threads += [t1, t2]
+    t1 = threading.Thread(target=run_uptime_sync, name="UptimeSyncThread", daemon=True)
+    t2 = threading.Thread(target=run_sync, name="SyncThread", daemon=True)
+    threads += [t1, t2]
 
     # Training data sync — only when the flag above is on
-    if SYNC_TRAINING_DATA:
-        t3 = threading.Thread(target=run_training_sync, name="TrainingSyncThread", daemon=True)
-        threads.append(t3)
-        print("[SYNC] Training data sync ENABLED")
-    else:
-        print("[SYNC] Training data sync DISABLED (SYNC_TRAINING_DATA = False)")
+    # if SYNC_TRAINING_DATA:
+    #     t3 = threading.Thread(target=run_training_sync, name="TrainingSyncThread", daemon=True)
+    #     threads.append(t3)
+    #     print("[SYNC] Training data sync ENABLED")
+    # else:
+    #     print("[SYNC] Training data sync DISABLED (SYNC_TRAINING_DATA = False)")
 
     for t in threads:
         t.start()

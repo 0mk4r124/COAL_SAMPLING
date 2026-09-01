@@ -199,7 +199,7 @@ class SamplerController:
     def check_all_samples_status(self):
         sample_cycle_complete = 0
         try:
-            sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_COMPLETE)
+            sample_cycle_complete = self.plc.readIntFromPLC(self.client, CYCLE_STATUS)
             print(f"[PLC_SAMPLER] All Samples status: {sample_cycle_complete}")
             logger.debug(f"All Samples status: {sample_cycle_complete}")
             time.sleep(0.5)
@@ -443,6 +443,29 @@ class SamplerController:
             self.mqtt.publish(TOPIC_OUT, {"status": "sampler_error", "msg": msg})
             raise
 
+    def check_home_reached(self):
+        """
+        PASSIVE home detection.
+
+        After the 3rd cycle the PLC drives the auger home on its own — the
+        manager must NOT command move_home. It only watches the FBs here.
+
+        Home = X_FORWORD FB 1  AND  Y_RIGHT FB 1  AND  Z_UP FB 1
+        """
+        try:
+            at_home = self.sensors_ready()
+            if at_home:
+                # The PLC brought the auger home by itself — the tracked
+                # position is a known reference again.
+                self.current_x_time = 0.0
+                self.current_y_time = 0.0
+            print(f"[PLC_SAMPLER] Home FB check: {'AT HOME' if at_home else 'not home yet'}")
+            logger.debug(f"Home FB check: at_home={at_home}")
+            return at_home
+        except Exception as e:
+            print(f"[PLC_SAMPLER] check_home_reached error: {e}")
+            logger.error(f"{traceback.format_exc()}")
+            return False
     # ── Positioning (absolute via home / relative from current position) ─────
 
     def move_xy(self, dx, dy):
@@ -806,6 +829,21 @@ class SamplerController:
 
                 elif action == "reset":
                     self.reset()
+
+                elif action == "check_home_status":
+                    # Passive poll after the last cycle: has the auger reached
+                    # home on its own, and is CYCLE_COMPLETE (DB24.18) = 1?
+                    if self.check_home_reached():
+                        try:
+                            cycle_complete = int(self.check_all_samples_status())
+                        except Exception:
+                            cycle_complete = 0
+                        self.mqtt.publish(TOPIC_OUT, {
+                            "status": "auger_at_home",
+                            "cycle_complete": 1 if cycle_complete == 1 else 0
+                        })
+                    else:
+                        self.mqtt.publish(TOPIC_OUT, {"status": "auger_not_home"})
 
             # Keep the Z-UP FB watcher running on every loop pass (~0.5 s)
             # so the 1 -> 0 dip AND the MATERIAL_HARD_STATUS bit are caught

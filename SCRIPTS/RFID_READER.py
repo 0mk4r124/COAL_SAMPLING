@@ -66,33 +66,33 @@ def main():
                     if len(rfid)<30 and rfid not in ig_rfids:
 
                         logger.debug(f"Tag raw={raw}  decoded={rfid!r}")
-                        # if is_truck_below_line(image_path=image_path):
-                        #     if not session_active:
-                        #         session_uid   = datetime.now().strftime("%Y%m%d%H%M%S")
-                        #         last_seen = time.time()
-                        #         session_active = True
-                        #         rfids = set()
-                        #         print(f"[RFID] Session started: {session_uid}")
-                        #         logger.info(f"Session started: {session_uid}")
+                        if is_truck_below_line(image_path=image_path):
+                            if not session_active:
+                                session_uid   = datetime.now().strftime("%Y%m%d%H%M%S")
+                                last_seen = time.time()
+                                session_active = True
+                                rfids = set()
+                                print(f"[RFID] Session started: {session_uid}")
+                                logger.info(f"Session started: {session_uid}")
 
-                        #     if rfid not in rfids:
-                        #         last_seen = time.time() 
-                        #         rfids.add(rfid)
-                        # else:
-                        #     print(f"[RFID] Session rejected: No truck present !")
-                        #     logger.info(f"Session rejected: No truck present !")
+                            if rfid not in rfids:
+                                last_seen = time.time() 
+                                rfids.add(rfid)
+                        else:
+                            print(f"[RFID] Session rejected: No truck present !")
+                            logger.info(f"Session rejected: No truck present !")
 
-                        if not session_active:
-                            session_uid   = datetime.now().strftime("%Y%m%d%H%M%S")
-                            last_seen = time.time()
-                            session_active = True
-                            rfids = set()
-                            print(f"[RFID] Session started: {session_uid}")
-                            logger.info(f"Session started: {session_uid}")
+                        # if not session_active:
+                        #     session_uid   = datetime.now().strftime("%Y%m%d%H%M%S")
+                        #     last_seen = time.time()
+                        #     session_active = True
+                        #     rfids = set()
+                        #     print(f"[RFID] Session started: {session_uid}")
+                        #     logger.info(f"Session started: {session_uid}")
 
-                        if rfid not in rfids:
-                            last_seen = time.time() 
-                            rfids.add(rfid)
+                        # if rfid not in rfids:
+                        #     last_seen = time.time() 
+                        #     rfids.add(rfid)
 
                 elif data and not reading_enabled:
                     # Buffer clear mode — silently discard incoming tags
