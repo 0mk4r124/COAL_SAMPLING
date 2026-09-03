@@ -102,6 +102,15 @@ def _fmt_dtstamp(value=None) -> str:
             continue
     return "".join(text.split())
 
+def _parse_sample_info(raw):
+    """SAMPLE_INFO is free-form JSON text — never let a bad row 500 the page."""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 def _lookup_pdf_url(vehicle_number: str = "", rfid_key: str = "") -> str:
     """
@@ -338,6 +347,7 @@ def fetch_history_data(request):
             "sample_3_image": f"/api/serve-file?file={row.sample_3_img_path}" if row.sample_3_img_path else None,
             "report_path": row.report_path if row.report_path else None,
             "bucket_no": row.bucket_no,
+            "sample_info": _parse_sample_info(row.sample_info),
         })
 
     return JsonResponse({
@@ -654,6 +664,30 @@ def get_current_status(request):
             emergency = plc.emergency
             auto_manual = plc.auto_manual
 
+            if current_state == "HARD_BLOCKED_WAIT":
+                return JsonResponse({
+                    "status": "blocked",
+                    "reason": "HARD_MATERIAL_BLOCKED",
+                    "uid": current_vehicle.uid,
+                    "current_state": current_state,
+                    "vehicle_number": vehicle_obj.vehicle_number,
+                    "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
+                    "retake_available": False,
+                    "last_error_uid": None,
+                })
+ 
+            if current_state == "AI_BLOCKED_WAIT":
+                return JsonResponse({
+                    "status": "blocked",
+                    "reason": "AI_BLOCKED",
+                    "uid": current_vehicle.uid,
+                    "current_state": current_state,
+                    "vehicle_number": vehicle_obj.vehicle_number,
+                    "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
+                    "retake_available": False,
+                    "last_error_uid": None,
+                })
+            
             if emergency == "ACTIVE":
                 return JsonResponse({
                     "status": "blocked",
@@ -886,4 +920,50 @@ def reset_system(request):
     
     except Exception as e:
         print(f"Error in reset_system: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+@csrf_exempt
+def ai_position_decision(request):
+    """
+    Operator's answer to the 'AI cannot see clearly' popup.
+ 
+    decision = "continue" -> manager picks a new position and keeps sampling
+    decision = "manual"   -> operator collects by hand; manager closes the
+                             session and marks it COMPLETED
+    """
+    if request.method != "POST":
+        return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
+ 
+    try:
+        data     = json.loads(request.body)
+        uid      = (data.get("uid") or "").strip()
+        decision = (data.get("decision") or "").strip().upper()
+ 
+        if decision not in ("CONTINUE", "MANUAL"):
+            return JsonResponse({"success": False,
+                                 "error": "decision must be 'continue' or 'manual'"}, status=400)
+ 
+        if not uid:
+            return JsonResponse({"success": False, "error": "uid is required"}, status=400)
+ 
+        # Only answer a session that is actually waiting — protects against a
+        # stale browser tab replaying an old popup into a fresh cycle.
+        plc = PLC_COMM.objects.filter(uid=uid).first()
+        if not plc or plc.state not in ("AI_BLOCKED_WAIT", "HARD_BLOCKED_WAIT"):
+            return JsonResponse({
+                "success": False,
+                "error": "This session is no longer waiting for a decision",
+            }, status=409)
+ 
+        mqtt = MQTT("MANAGER_AI_DECISION")
+        mqtt.publish("manager/decision", {
+            "action":   "ai_decision",
+            "decision": decision,
+            "uid":      uid,
+        })
+ 
+        return JsonResponse({"success": True, "decision": decision, "uid": uid})
+ 
+    except Exception as e:
+        print(f"[ERROR] ai_position_decision: {e}")
         return JsonResponse({"success": False, "error": str(e)}, status=500)

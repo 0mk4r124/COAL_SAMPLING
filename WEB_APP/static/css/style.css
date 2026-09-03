@@ -300,3 +300,127 @@ body {
     opacity: 0.65;
     cursor: not-allowed;
 }
+
+/* |* Modal never exceeds the viewport, and nothing inside it scrolls *| */
+#sampleMapModal .modal-dialog {
+    max-width: 95vw;
+    margin: 1rem auto;
+}
+ 
+#sampleMapModal .modal-content {
+    max-height: 95vh;
+    overflow: hidden;
+}
+ 
+#sampleMapModal .modal-body {
+    overflow: hidden;
+    padding: 12px 16px;
+}
+ 
+#sampleMapModal .sample-table {
+    table-layout: fixed;
+    font-size: 0.85rem;
+}
+ 
+/* |* Diagram is sized by HEIGHT, so widening the modal cannot make it taller.
+   Widths follow from the aspect ratios and the row stays centred. *| */
+.truck-diagram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    height: min(30vh, 240px);
+    padding: 4px 0;
+}
+ 
+.truck-body {
+    position: relative;
+    height: 82%;
+    aspect-ratio: 5 / 2;
+    width: auto;
+    flex: 0 0 auto;
+    border: 2px solid #0d6efd;
+    border-radius: 6px;
+    background: #f8f9fa;
+    width: 55vw;
+}
+ 
+/* |* Square head, 22% taller than the body so it reads as a cab, not a line *| */
+.truck-cabin {
+    position: relative;
+    height: 100%;
+    aspect-ratio: 1 / 1;
+    width: auto;
+    flex: 0 0 auto;
+    border: 2px solid #0d6efd;
+    border-radius: 6px;
+    background: #f8f9fa;
+}
+ 
+.truck-body-label,
+.truck-cabin-label {
+    position: absolute;
+    bottom: 4px;
+    width: 100%;
+    text-align: center;
+    font-size: 0.7rem;
+    letter-spacing: 2px;
+    color: #adb5bd;
+    pointer-events: none;
+}
+ 
+.sample-dot {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    border: 2px solid #fff;
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.35);
+    cursor: pointer;          /* was: cursor: help  */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
+}
+ 
+.sample-dot-ok   { background: #198754; }
+.sample-dot-fail { background: #dc3545; animation: sample-blink 1.1s ease-in-out infinite; }
+.sample-dot-hard { background: #0d6efd; }
+ 
+@keyframes sample-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.25; }
+}
+ 
+@media (prefers-reduced-motion: reduce) {
+    .sample-dot-fail { animation: none; }
+}
+ 
+.sample-seq {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+.sample-seq.sample-dot-fail { animation: none; }
+ 
+.sample-dot-legend {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+.legend-ok   { background: #198754; }
+.legend-fail { background: #dc3545; }
+.legend-hard { background: #0d6efd; }

@@ -23,6 +23,13 @@ const wrapper = document.getElementById("zoomWrapper");
 const modalElement = document.getElementById('vehicleDetailsModal');
 const vehicleModal = new bootstrap.Modal(modalElement);
 
+let aiModalOpen     = false;
+let aiModalInstance = null;
+let aiBlockedUID    = null;
+let hardModalOpen     = false;
+let hardModalInstance = null;
+let hardBlockedUID    = null;
+
 function getCookie(name) {
     let cookieValue = null;
     if (document.cookie && document.cookie !== "") {
@@ -50,6 +57,26 @@ let waitModalOpen = false;
 function handleBlockingState(data) {
     const modalEl = document.getElementById('waitModal');
 
+    if (data.status === "blocked" && data.reason === "HARD_MATERIAL_BLOCKED") {
+        showHardMaterialModal(data);
+        return true;
+    }
+    if (hardModalOpen && data.reason !== "HARD_MATERIAL_BLOCKED") {
+        hardModalOpen = false;
+        if (hardModalInstance) hardModalInstance.hide();
+    }
+ 
+    if (data.status === "blocked" && data.reason === "AI_BLOCKED") {
+        showAiBlockedModal(data);
+        return true;                      // stop further UI updates
+    }
+    // If we were showing the AI modal and the manager has moved on
+    // (operator answered, or the decision timed out), close it.
+    if (aiModalOpen && data.reason !== "AI_BLOCKED") {
+        aiModalOpen = false;
+        if (aiModalInstance) aiModalInstance.hide();
+    }
+
     if (!waitModalInstance) {
         waitModalInstance = new bootstrap.Modal(modalEl, {
             backdrop: 'static',
@@ -60,33 +87,33 @@ function handleBlockingState(data) {
     if (data.status === "blocked") {
         if (!waitModalOpen) {
             waitModalOpen = true;
-function fetchVehicleMaster() {
-    fetch('/api/vehicle_master/')
-        .then(res => res.json())
-        .then(data => {
-            const tbody = document.getElementById('vehicleMasterBody');
-            tbody.innerHTML = '';
+            function fetchVehicleMaster() {
+                fetch('/api/vehicle_master/')
+                    .then(res => res.json())
+                    .then(data => {
+                        const tbody = document.getElementById('vehicleMasterBody');
+                        tbody.innerHTML = '';
 
-            data.data.forEach(row => {
-                const tr = document.createElement('tr');
+                        data.data.forEach(row => {
+                            const tr = document.createElement('tr');
 
-                tr.innerHTML = `
-                    <td>${row.rfid}</td>
-                    <td>${row.vehicle_number}</td>
-                    <td>${row.vendor_name}</td>
-                    <td>${row.vendor_code}</td>
-                    <td>
-                        <button class="btn btn-sm btn-warning"
-                            onclick='openEditModal(${JSON.stringify(row)})'>
-                            Edit
-                        </button>
-                    </td>
-                `;
+                            tr.innerHTML = `
+                                <td>${row.rfid}</td>
+                                <td>${row.vehicle_number}</td>
+                                <td>${row.vendor_name}</td>
+                                <td>${row.vendor_code}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-warning"
+                                        onclick='openEditModal(${JSON.stringify(row)})'>
+                                        Edit
+                                    </button>
+                                </td>
+                            `;
 
-                tbody.appendChild(tr);
-            });
-        });
-}
+                            tbody.appendChild(tr);
+                        });
+                    });
+            }
             const message = document.getElementById('waitModalMessage');
 
             if (data.reason === "EMERGENCY_ACTIVE") {
@@ -588,6 +615,12 @@ function populateTable(data, table_name) {
             const PrintButton = `<button class="btn btn-sm btn-warning" onclick="sendPrintData(${JSON.stringify(row).replace(/"/g, '&quot;')})">
                 <i class="fas fa-print"></i> Print
             </button>`;
+            const SampleMapButton = row.sample_info
+                ? `<button class="btn btn-sm btn-dark"
+                           onclick='openSampleMap(${JSON.stringify(row).replace(/'/g, "&#39;")})'>
+                       <i class="fas fa-map-marker-alt"></i> Samples
+                   </button>`
+                : `<span class="text-muted small">—</span>`;
 
             tr.innerHTML = `
                 <td>${row.sno}</td>
@@ -600,6 +633,7 @@ function populateTable(data, table_name) {
                 <td>${Img1Button}</td>
                 <td>${Img2Button}</td>
                 <td>${Img3Button}</td>
+                <td>${SampleMapButton}</td>
                 <td>${ReportButton}</td>
                 <td>${PrintButton}</td>
             `;
@@ -980,3 +1014,311 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 10 * 1000);
 
 });
+
+ 
+function showAiBlockedModal(data) {
+    aiBlockedUID = data.uid;
+ 
+    const label = document.getElementById('aiBlockedVehicle');
+    if (label) {
+        label.textContent = `${data.vehicle_number || '-'} — ${data.vendor_name || '-'}`;
+    }
+ 
+    if (aiModalOpen) return;              // already showing; don't re-open on every poll
+ 
+    if (!aiModalInstance) {
+        aiModalInstance = new bootstrap.Modal(
+            document.getElementById('aiBlockedModal'),
+            { backdrop: 'static', keyboard: false }
+        );
+    }
+ 
+    // Re-enable the buttons for this new prompt
+    ['aiContinueBtn', 'aiManualBtn'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = false;
+    });
+ 
+    aiModalOpen = true;
+    aiModalInstance.show();
+}
+ 
+function handleAiDecision(decision) {
+    if (!aiBlockedUID) {
+        alert('No active session to answer.');
+        return;
+    }
+ 
+    // Lock both buttons immediately — a double click would publish the choice
+    // twice and the second message would be consumed by the NEXT block.
+    ['aiContinueBtn', 'aiManualBtn'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = true;
+    });
+ 
+    fetch('/api/ai_position_decision/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: aiBlockedUID, decision: decision })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            aiModalOpen = false;
+            if (aiModalInstance) aiModalInstance.hide();
+        } else {
+            ['aiContinueBtn', 'aiManualBtn'].forEach(id => {
+                const b = document.getElementById(id);
+                if (b) b.disabled = false;
+            });
+            alert('❌ Could not send decision: ' + (res.error || 'Unknown error'));
+        }
+    })
+    .catch(err => {
+        ['aiContinueBtn', 'aiManualBtn'].forEach(id => {
+            const b = document.getElementById(id);
+            if (b) b.disabled = false;
+        });
+        console.error(err);
+        alert('❌ Network error while sending the decision');
+    });
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// SAMPLE MAP — plot sample positions on the truck body
+// ════════════════════════════════════════════════════════════════════════════
+
+let sampleMapModalInstance = null;
+let sampleMapState = { attempts: [], bounds: {}, page: 0, perPage: 6, info: null };
+ 
+/**
+ * How many attempts fit on one page without the modal scrolling.
+ *
+ * Everything except the table has a known height, so the leftover space
+ * divided by the row height is the answer. Clamped to 3..8 so a very short
+ * window still shows something useful and a very tall one doesn't turn the
+ * page into a wall of rows.
+ */
+function sampleMapPerPage() {
+    const vh      = window.innerHeight;
+    const diagram = Math.min(0.30 * vh, 240);          // matches the CSS below
+    const chrome  = 64 + 72 + 38 + 38 + 40 + 34 + 34;  // header, footer, legend,
+                                                       // pager, badges, thead, padding
+    const rowH    = 34;
+    return Math.max(3, Math.min(8, Math.floor((vh * 0.94 - chrome - diagram) / rowH)));
+}
+ 
+function openSampleMap(rowJson) {
+    let row;
+    try { row = typeof rowJson === 'string' ? JSON.parse(rowJson) : rowJson; }
+    catch (e) { console.error(e); return; }
+ 
+    const info = row.sample_info;
+ 
+    document.getElementById('sampleMapTitle').textContent =
+        `${row.vehicle_number || '-'} — ${row.vendor_name || '-'}`;
+ 
+    const body   = document.getElementById('sampleMapBody');
+    const pager  = document.getElementById('sampleMapPager');
+    const summry = document.getElementById('sampleMapSummary');
+ 
+    body.querySelectorAll('.sample-dot').forEach(d => d.remove());
+ 
+    if (!info || !Array.isArray(info.attempts) || info.attempts.length === 0) {
+        pager.classList.add('d-none');
+        summry.innerHTML =
+            `<div class="alert alert-secondary mb-0 text-center">
+                No sample position data recorded for this vehicle.
+             </div>`;
+        showSampleMapModal();
+        return;
+    }
+ 
+    const b = info.bounds || {};
+    sampleMapState = {
+        attempts: info.attempts,
+        bounds: {
+            xMin: b.x_min !== undefined ? b.x_min : 35,
+            xMax: b.x_max !== undefined ? b.x_max : 100,
+            yMin: b.y_min !== undefined ? b.y_min : 40,
+            yMax: b.y_max !== undefined ? b.y_max : 80
+        },
+        page: 0,
+        perPage: sampleMapPerPage(),
+        info: info
+    };
+ 
+    renderSampleMapPage();
+    showSampleMapModal();
+}
+ 
+function sampleMapPage(delta) {
+    const pages = Math.ceil(sampleMapState.attempts.length / sampleMapState.perPage);
+    const next  = sampleMapState.page + delta;
+    if (next < 0 || next >= pages) return;
+    sampleMapState.page = next;
+    renderSampleMapPage();
+}
+ 
+function renderSampleMapPage() {
+    const { attempts, bounds, page, perPage, info } = sampleMapState;
+ 
+    const body   = document.getElementById('sampleMapBody');
+    const pager  = document.getElementById('sampleMapPager');
+    const summry = document.getElementById('sampleMapSummary');
+ 
+    body.querySelectorAll('.sample-dot').forEach(d => d.remove());
+ 
+    const total = attempts.length;
+    const pages = Math.ceil(total / perPage);
+    const start = page * perPage;
+    const slice = attempts.slice(start, start + perPage);
+ 
+    const pct = (v, lo, hi) => {
+        if (v === null || v === undefined || hi === lo) return 50;
+        return Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+    };
+ 
+    const dotClass = a => {
+        if (a.status === 'SUCCESS') return 'sample-dot-ok';
+        if (a.reason === 'HARD_MATERIAL') return 'sample-dot-hard';
+        return 'sample-dot-fail';
+    };
+ 
+    slice.forEach(a => {
+        const dot = document.createElement('div');
+        dot.className = 'sample-dot ' + dotClass(a);
+        dot.style.left = `calc(6% + ${pct(a.x, bounds.xMin, bounds.xMax) * 0.88}%)`;
+        dot.style.top  = `calc(12% + ${pct(a.y, bounds.yMin, bounds.yMax) * 0.72}%)`;
+        dot.textContent = a.seq;
+        dot.title =
+            `#${a.seq} · Area ${a.area ?? '-'} · X ${a.x ?? '-'} Y ${a.y ?? '-'}\n` +
+            `${a.status === 'SUCCESS' ? 'Collected' : 'Failed: ' + (a.reason || 'unknown')}\n` +
+            `${a.time || ''}`;
+        body.appendChild(dot);
+    });
+ 
+    if (total > perPage) {
+        pager.classList.remove('d-none');
+        document.getElementById('sampleMapRange').textContent =
+            `Showing ${start + 1}–${Math.min(start + perPage, total)} of ${total} attempts`;
+        document.getElementById('sampleMapPrev').disabled = (page === 0);
+        document.getElementById('sampleMapNext').disabled = (page >= pages - 1);
+    } else {
+        pager.classList.add('d-none');
+    }
+ 
+    const mode = info.collection_mode === 'MANUAL'
+        ? `<span class="badge bg-warning text-dark">MANUAL COLLECTION${
+              info.manual_reason ? ' · ' + info.manual_reason.replaceAll('_', ' ') : ''}</span>`
+        : `<span class="badge bg-secondary">AUTO</span>`;
+ 
+    const badgeFor = a => {
+        if (a.status === 'SUCCESS') return 'bg-success';
+        if (a.reason === 'HARD_MATERIAL') return 'bg-primary';
+        return 'bg-danger';
+    };
+ 
+    const rows = slice.map(a => `
+        <tr>
+            <td><span class="sample-seq ${dotClass(a)}">${a.seq}</span></td>
+            <td>${a.area ?? '-'}</td>
+            <td>${a.x ?? '-'}, ${a.y ?? '-'}</td>
+            <td><span class="badge ${badgeFor(a)}">${a.status}</span></td>
+            <td>${a.reason ? a.reason.replaceAll('_', ' ') : '-'}</td>
+            <td class="text-muted small">${a.time || '-'}</td>
+        </tr>`).join('');
+ 
+    summry.innerHTML = `
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <div>
+                <span class="badge bg-success">${info.successful || 0} collected</span>
+                <span class="badge bg-danger ms-1">${info.failed || 0} failed</span>
+            </div>
+            <div>${mode}</div>
+        </div>
+        <table class="table table-bordered table-sm text-center align-middle mb-0 sample-table">
+            <thead class="table-dark">
+                <tr>
+                    <th>#</th><th>AREA</th><th>X, Y</th>
+                    <th>STATUS</th><th>REASON</th><th>TIME</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>`;
+}
+ 
+function showSampleMapModal() {
+    if (!sampleMapModalInstance) {
+        sampleMapModalInstance = new bootstrap.Modal(document.getElementById('sampleMapModal'));
+    }
+    sampleMapModalInstance.show();
+}
+ 
+// Re-fit when the window is resized while the modal is open, so rotating a
+// tablet or snapping the window doesn't reintroduce a scrollbar.
+window.addEventListener('resize', function () {
+    const el = document.getElementById('sampleMapModal');
+    if (!el || !el.classList.contains('show')) return;
+    if (!sampleMapState.attempts.length) return;
+ 
+    const per = sampleMapPerPage();
+    if (per === sampleMapState.perPage) return;
+ 
+    // Keep the first visible attempt visible after the page size changes
+    const firstVisible = sampleMapState.page * sampleMapState.perPage;
+    sampleMapState.perPage = per;
+    sampleMapState.page = Math.floor(firstVisible / per);
+    renderSampleMapPage();
+});
+
+function showHardMaterialModal(data) {
+    hardBlockedUID = data.uid;
+ 
+    const label = document.getElementById('hardBlockedVehicle');
+    if (label) label.textContent = `${data.vehicle_number || '-'} — ${data.vendor_name || '-'}`;
+ 
+    if (hardModalOpen) return;                 // don't re-open on every poll
+ 
+    if (!hardModalInstance) {
+        hardModalInstance = new bootstrap.Modal(
+            document.getElementById('hardMaterialModal'),
+            { backdrop: 'static', keyboard: false }
+        );
+    }
+ 
+    const btn = document.getElementById('hardManualBtn');
+    if (btn) btn.disabled = false;
+ 
+    hardModalOpen = true;
+    hardModalInstance.show();
+}
+ 
+function handleHardMaterialDecision() {
+    if (!hardBlockedUID) { alert('No active session to answer.'); return; }
+ 
+    const btn = document.getElementById('hardManualBtn');
+    if (btn) btn.disabled = true;              // guard against a double click
+ 
+    fetch('/api/ai_position_decision/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: hardBlockedUID, decision: 'manual' })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            hardModalOpen = false;
+            if (hardModalInstance) hardModalInstance.hide();
+        } else {
+            if (btn) btn.disabled = false;
+            alert('❌ Could not send acknowledgement: ' + (res.error || 'Unknown error'));
+        }
+    })
+    .catch(err => {
+        if (btn) btn.disabled = false;
+        console.error(err);
+        alert('❌ Network error while sending the acknowledgement');
+    });
+}

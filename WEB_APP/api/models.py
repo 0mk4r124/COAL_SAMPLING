@@ -14,6 +14,7 @@ class VEHICLE_LOGS(models.Model):
     status = models.CharField(db_column='STATUS', max_length=20, blank=True, null=True)
     is_synced = models.CharField(db_column='IS_SYNCED', max_length=20, blank=True, null=True)
     error_message = models.CharField(db_column='ERROR_MESSAGE', max_length=500, blank=True, null=True)
+    sample_info = models.TextField(db_column='SAMPLE_INFO', blank=True, null=True)
     
     create_time = models.DateTimeField(db_column='CREATE_TIME', blank=True, null=True)
     update_time = models.DateTimeField(db_column='UPDATE_TIME', blank=True, null=True)

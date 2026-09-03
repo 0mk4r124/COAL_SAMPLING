@@ -21,9 +21,9 @@ from DEPENDANT.LOGGING import initializeLogger
 # AI Model Initialization 
 BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 MODEL_CONFIG_PATH = BASE_FILE_PATH + 'MODEL/configs/COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml'
-MODEL_PATH = BASE_FILE_PATH + 'MODEL/COAL_SAMPLING_27MAR/'
+MODEL_PATH = BASE_FILE_PATH + 'MODEL/coal_sampling_model_27aug/'
 MODEL_FILE = 'model_final.pth'
-CLASS_JSON = BASE_FILE_PATH + 'MODEL/COAL_SAMPLING_27MAR/COAL_SAMPLING_27MAR.json'
+CLASS_JSON = BASE_FILE_PATH + 'MODEL/coal_sampling_model_27aug/coal_sampling_27aug.json'
 LOGS_PATH = BASE_FILE_PATH + "/LOGS/"
 LEFT_LOGO_PATH = BASE_FILE_PATH + "/WEB_APP/static/logo/utcl.png"
 RIGHT_LOGO_PATH = BASE_FILE_PATH + "/WEB_APP/static/logo/insightzz_logo.png"
@@ -175,17 +175,17 @@ def confirm_auger_position(cam1_image_path: str, cam2_image_path: str, target_ar
         logger.info(f"CAM1 Position Valid: {cam1_position}")
         
         # ─── CAM2 Validation ──────────────────────────────────────────────────────
-        logger.info("CAM2 Check: Validating AUGER_BOTTOM in target coal area...")
+        # logger.info("CAM2 Check: Validating AUGER_BOTTOM in target coal area...")
         # cam2_position = _validate_cam2_auger(cam2_image_path, target_area)
-        cam2_position = True
-        logger.info(f"CAM2 Position Valid: {cam2_position}")
+        # cam2_position = True
+        # logger.info(f"CAM2 Position Valid: {cam2_position}")
         
         # ─── Final Result ──────────────────────────────────────────────────────────
-        result = cam1_position and cam2_position
+        result = cam1_position # and cam2_position
         if result:
             logger.info(f"AUGER POSITIONING CONFIRMED - Both CAM1 and CAM2 validations passed")
         else:
-            logger.warning(f"AUGER POSITIONING FAILED - CAM1={cam1_position}, CAM2={cam2_position}")
+            logger.warning(f"AUGER POSITIONING FAILED - CAM1={cam1_position}")
         
         return result
     
@@ -224,10 +224,10 @@ def _validate_cam1_region(image_path: str) -> bool:
             return False
         
         allowed_classes = {"COAL", "TRUCK_BODY"}
-        found_classes = []
+        found_classes = set()
         for detection in labellist:
-            if len(detection) < 6:
-                continue
+            # if len(detection) < 6:
+            #     continue
                 
             class_name = detection[5]
             x1 = int(detection[3])

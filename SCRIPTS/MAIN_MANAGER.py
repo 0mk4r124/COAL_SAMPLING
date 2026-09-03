@@ -22,6 +22,8 @@ import pymysql
 import subprocess
 import traceback
 import threading
+import json
+import shutil
 
 from datetime import datetime
 from enum import Enum, auto
@@ -59,6 +61,25 @@ SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation
 MOVEMENT_DURATION = 2 # Duration to move in each direction during auger position confirmation loops (in seconds)
 HARD_RETRY_MAX_SHIFT      = 10  # Max % offset on X and Y for the nearby retry point (user spec: not more than 10%)
 HARD_MATERIAL_MAX_RETRIES = 3   # After this many consecutive hard hits, give up "nearby" and pick a fresh area via home
+ 
+# ── AI auger position confirmation (before cycle start) ───────────────────────
+AI_CONFIRM_ENABLED  = False   # False -> skip the check, start the cycle as before
+AI_CONFIRM_RETRIES  = 3      # attempts at the SAME position (fresh capture each time)
+AI_CONFIRM_DELAY    = 2      # seconds between attempts
+TEMP_IMG_MAX_AGE = 15   # seconds — the background loop rewrites every ~1s,
+                        # so anything older means that camera thread is dead
+CAM_CMD_GAP      = 0.4  # gap between the two cam commands (see note below)
+ 
+# How long to wait for the operator's choice on the AI-blocked popup before
+# giving up on them and continuing automatically with a new position.
+AI_DECISION_TIMEOUT = 600    # 10 minutes
+# Two hard-material hits back to back mean the load is hard where we are
+# probing — retrying more just hammers the auger into rock.
+HARD_MATERIAL_CONSECUTIVE_LIMIT = 2
+ 
+# If nobody answers the popup, default to MANUAL (see the note in the handler)
+HARD_DECISION_TIMEOUT = 600     # 10 minutes
+
 # ── Sampling geometry ─────────────────────────────────────────────────────────
 X_MIN, X_MAX = 35, 100   # X travel bounds, % of full travel
 Y_MIN, Y_MAX = 40, 80    # Y travel bounds, % of full travel
@@ -70,8 +91,10 @@ RESULT_IMG_PATH = os.path.join(BASE_FILE_PATH, "RESULT")
 INF_IMG = os.path.join(BASE_FILE_PATH, "INF")
 LOGS_PATH = os.path.join(BASE_FILE_PATH, "LOGS")
 
+TOPIC_DECISION = "manager/decision"
 IN_TOPICS = (
     "camera/status",
+    TOPIC_DECISION,
     "plc_barrier/status",
     "plc_sampler/status",
     "rfid/status",
@@ -227,6 +250,8 @@ class State(Enum):
     GREEN_SIGNAL             = auto()
     COMPLETE                 = auto()
     ERROR                    = auto()
+    AI_BLOCKED_WAIT          = auto()
+    HARD_BLOCKED_WAIT        = auto()
 
 # ── Database helpers ──────────────────────────────────────────────────────────
 def _db_connect():
@@ -524,6 +549,25 @@ def db_update_plc_comm(uid: str, state: str, emergency: str = None, auto_manual:
     
     return False
 
+def db_update_sample_info(uid: str, info: dict) -> bool:
+    """Persist the sample map JSON onto VEHICLE_LOGS.SAMPLE_INFO."""
+    db = None
+    try:
+        db = _db_connect()
+        cur = db.cursor()
+        cur.execute(
+            "UPDATE VEHICLE_LOGS SET SAMPLE_INFO = %s, UPDATE_TIME = %s WHERE UID = %s",
+            (json.dumps(info), datetime.now(), uid)
+        )
+        db.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] db_update_sample_info error: {e}")
+        logger.error(f"{traceback.format_exc()}")
+    finally:
+        if db: db.close()
+    return False
+
 # ------------------------------------------------------------------------------
 class Manager:
 
@@ -549,6 +593,8 @@ class Manager:
         State.GREEN_SIGNAL         : "_handle_green_signal",
         State.COMPLETE             : "_handle_complete",
         State.ERROR                : "_handle_error",
+        State.AI_BLOCKED_WAIT      : "_handle_ai_blocked_wait",
+        State.HARD_BLOCKED_WAIT    : "_handle_hard_blocked_wait",
     }
 
     def __init__(self):
@@ -574,7 +620,11 @@ class Manager:
         self._final_home_confirmed = False   # auger home + CYCLE_COMPLETE=1 seen
         self._final_home_at        = 0.0     # timestamp that happened
         self._last_home_poll       = 0.0     # last check_home_status poll
-        
+         
+        self._sample_info      = self._new_sample_info()
+        self._ai_blocked_pos   = None    # position the AI rejected (for logging)
+        self._ai_block_count   = 0       # how many times the AI has blocked this session
+
         # AI Model initialization
         if initialize_ai_model():
             self.ai_model = True
@@ -589,6 +639,7 @@ class Manager:
         self._force_home_next = True
         self._hard_retry_pos = None   # nearby point to use on the next CYCLE_POSITION pass (hard-material retry)
         self._hard_retries   = 0      # consecutive hard-material hits for the CURRENT cycle number
+        self._consecutive_hard = 0    # hard-material hits in a row; any SUCCESS clears it
 
         # Auger position confirmation tracking
         self._confirmation_loop_count = 0
@@ -686,35 +737,82 @@ class Manager:
         return False
     
     def _capture_images_for_confirmation(self, loop_num: int, movement_type: str = "") -> tuple[str, str] | None:
+        """
+        Get a CAM1 + CAM3 pair for the AI check.
+
+        Primary: request a fresh single capture from CAM_CAPTURE.
+        Fallback: use the TEMP_IMG/CAM*_REDUCED.jpg frames that the background
+        capture threads rewrite roughly once a second — the same images used
+        during testing. They are copied into the session folder so the AI's
+        _vis.jpg output is kept per session instead of overwriting TEMP_IMG.
+        """
         try:
             inf_dir = os.path.join(INF_IMG, self.date_file, self.uid)
             os.makedirs(inf_dir, exist_ok=True)
-            
+
             suffix = f"_loop{loop_num}_{movement_type}" if movement_type else f"_loop{loop_num}"
             cam1_path = os.path.join(inf_dir, f"CAM1{suffix}.jpg")
             cam3_path = os.path.join(inf_dir, f"CAM3{suffix}.jpg")
 
             print(f"[MANAGER] Capturing images (Loop {loop_num}, {movement_type})")
 
-            # Trigger capture
+            # CAM_CAPTURE keeps ONE incoming MQTT slot and polls it every 50 ms.
+            # Publishing both commands back to back overwrites the first, so
+            # CAM1 never fires. The gap lets its loop pick up cam1_single.
             self._cam(action="cam1_single", cam="cam1", path=cam1_path)
+            time.sleep(CAM_CMD_GAP)
             self._cam(action="cam3_single", cam="cam3", path=cam3_path)
 
-            # Wait deterministically instead of sleep
-            ok1 = self._wait_for_file(cam1_path, cam3_path)
-
-            if ok1:
+            if self._wait_for_file(cam1_path, cam3_path):
                 print(f"[MANAGER] Capture OK: {cam1_path}, {cam3_path}")
                 logger.debug(f"Capture OK: {cam1_path}, {cam3_path}")
                 return (cam1_path, cam3_path)
 
-            return None
+            # ── Fallback: the continuously-refreshed TEMP_IMG frames ─────────
+            print("[MANAGER] Fresh capture failed — falling back to TEMP_IMG frames")
+            logger.warning("Fresh capture failed — falling back to TEMP_IMG frames")
+            return self._temp_image_pair(cam1_path, cam3_path)
 
         except Exception as e:
             print(f"[MANAGER] Error capturing images: {e}")
             logger.error(f"{traceback.format_exc()}")
             return None
 
+    def _temp_image_pair(self, cam1_dest: str, cam3_dest: str) -> tuple[str, str] | None:
+        """
+        Copy the latest TEMP_IMG frames into the session folder.
+
+        Returns None if either frame is missing or stale — a frame older than
+        TEMP_IMG_MAX_AGE means that camera's background thread has stopped, and
+        running the AI on a minutes-old picture of a different truck would be
+        worse than reporting a failure.
+        """
+        pairs = [("CAM1", os.path.join(TEMP_IMG_PATH, "CAM1_REDUCED.jpg"), cam1_dest),
+                 ("CAM3", os.path.join(TEMP_IMG_PATH, "CAM3_REDUCED.jpg"), cam3_dest)]
+
+        for name, src, _dest in pairs:
+            if not os.path.exists(src):
+                print(f"[MANAGER] TEMP image missing for {name}: {src}")
+                logger.warning(f"TEMP image missing for {name}: {src}")
+                return None
+
+            age = time.time() - os.path.getmtime(src)
+            if age > TEMP_IMG_MAX_AGE:
+                print(f"[MANAGER] TEMP image for {name} is stale ({age:.0f}s old) — not using it")
+                logger.warning(f"TEMP image for {name} is stale ({age:.0f}s old)")
+                return None
+
+        try:
+            for name, src, dest in pairs:
+                shutil.copy2(src, dest)
+                logger.debug(f"Using TEMP frame for {name}: {src} -> {dest}")
+            print(f"[MANAGER] Using TEMP frames: {cam1_dest}, {cam3_dest}")
+            return (cam1_dest, cam3_dest)
+        except Exception as e:
+            print(f"[MANAGER] Could not copy TEMP frames: {e}")
+            logger.error(f"{traceback.format_exc()}")
+            return None
+        
     def _confirm_auger_position_with_movement_loop(self, target_area: int) -> bool:
         confirmations = []
         
@@ -822,6 +920,105 @@ class Manager:
             logger.error(f"{traceback.format_exc()}")
             return False
 
+# ─────────────────────────────────────────────────────────────────────────────
+# A6. NEW METHODS — sample-info tracking. Add near the other helpers.
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+    def _new_sample_info(self) -> dict:
+        return {
+            "uid": self.uid,
+            "total_cycles": TOTAL_CYCLES,
+            "successful": 0,
+            "failed": 0,
+            "collection_mode": "AUTO",
+            "bounds": {"x_min": X_MIN, "x_max": X_MAX, "y_min": Y_MIN, "y_max": Y_MAX},
+            "attempts": [],
+            "updated": None,
+        }
+ 
+    def _record_attempt(self, pos: dict | None, status: str, reason: str | None = None):
+        """
+        Log one sampling attempt — successful or failed — and persist it.
+ 
+        Written immediately rather than at the end of the session so the data
+        survives a crash, a reset, or an ERROR state mid-cycle.
+        """
+        try:
+            if self._sample_info is None:
+                self._sample_info = self._new_sample_info()
+            self._sample_info["uid"] = self.uid
+ 
+            self._sample_info["attempts"].append({
+                "seq":    len(self._sample_info["attempts"]) + 1,
+                "cycle":  self.cycle,
+                "area":   (pos or {}).get("area"),
+                "x":      (pos or {}).get("x"),
+                "y":      (pos or {}).get("y"),
+                "status": status,                       # SUCCESS | FAILED
+                "reason": reason,
+                "time":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+ 
+            if status == "SUCCESS": self._sample_info["successful"] += 1
+            else:                   self._sample_info["failed"] += 1
+ 
+            self._sample_info["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+ 
+            if self.uid:
+                db_update_sample_info(self.uid, self._sample_info)
+ 
+            print(f"[MANAGER] Sample attempt logged: {status} "
+                  f"{reason or ''} at {pos}")
+            logger.debug(f"Sample attempt logged: {status} {reason or ''} at {pos}")
+        except Exception:
+            # Never let bookkeeping break the cycle
+            logger.error(f"{traceback.format_exc()}")
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# A7. AI CONFIRMATION — add next to _confirm_auger_position_with_movement_loop
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+    def _confirm_position_before_start(self, target_area: int) -> bool:
+        """
+        Run the AI auger-position check before giving cycle start.
+ 
+        Retries AI_CONFIRM_RETRIES times at the SAME X/Y, capturing FRESH
+        frames each time — re-running the model on the identical image file
+        returns the identical answer, so a retry is only meaningful with a new
+        capture (it also rides out motion blur or a passing shadow).
+        """
+        for attempt in range(1, AI_CONFIRM_RETRIES + 1):
+            print(f"[MANAGER] AI position check {attempt}/{AI_CONFIRM_RETRIES} (area {target_area})")
+            logger.debug(f"AI position check {attempt}/{AI_CONFIRM_RETRIES} (area {target_area})")
+ 
+            images = self._capture_images_for_confirmation(attempt, "precycle")
+            if not images:
+                print(f"[MANAGER] AI check {attempt}: image capture failed")
+                logger.warning(f"AI check {attempt}: image capture failed")
+            else:
+                try:
+                    result = confirm_auger_position(images[0], images[1], target_area)
+                except Exception as e:
+                    print(f"[MANAGER] AI check {attempt} error: {e}")
+                    logger.error(f"{traceback.format_exc()}")
+                    result = False
+ 
+                if result:
+                    print(f"[MANAGER] AI POSITION CONFIRMED on attempt {attempt}")
+                    logger.debug(f"AI position confirmed on attempt {attempt}")
+                    return True
+ 
+                print(f"[MANAGER] AI check {attempt} FAILED")
+                logger.warning(f"AI check {attempt} failed (area {target_area})")
+ 
+            if attempt < AI_CONFIRM_RETRIES:
+                time.sleep(AI_CONFIRM_DELAY)
+ 
+        print(f"[MANAGER] AI position NOT confirmed after {AI_CONFIRM_RETRIES} attempts")
+        logger.warning(f"AI position not confirmed after {AI_CONFIRM_RETRIES} attempts")
+        return False
+    
     # ── State handlers ────────────────────────────────────────────────────────
 
     def _handle_idle(self):
@@ -1141,42 +1338,122 @@ class Manager:
         logger.debug(f"Moving to sampling position: {pos} (direct={direct})")
         self._goto(State.CYCLE_CONFIRM)
 
-    def _handle_cycle_confirm(self):
-        msg = self._pop("plc_sampler/status")
-        print(f"[MANAGER] Cycle Waiting for position confirmation")
-        time.sleep(1)  # faster polling — position_set is detected ~1s sooner
-
-        if msg and msg.get("status") == "emergency_stop":
-            print("[MANAGER] Emergency stop detected waiting until reset !")
-            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
-            self._flush_topic("plc_sampler/status")  # drop stale queued messages
+    def _handle_ai_blocked_wait(self):
+        """
+        The AI could not confirm the auger position. The UI shows a popup with
+        two choices; the web app publishes the answer on `manager/decision`.
+ 
+          CONTINUE -> pick a fresh position and carry on sampling
+          MANUAL   -> operator collects the sample by hand; the session is
+                      closed out and marked COMPLETED
+ 
+        Emergency still takes priority, and an unanswered popup falls through
+        to CONTINUE after AI_DECISION_TIMEOUT so a truck is never stranded.
+        """
+        # Emergency must still win while we are waiting
+        emg = self._pop("plc_sampler/status")
+        if emg and emg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop while waiting for AI decision")
+            logger.warning("Emergency stop while waiting for AI decision")
+            self._flush_topic("plc_sampler/status")
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
-        
+ 
+        msg = self._pop(TOPIC_DECISION)
+        decision = (msg or {}).get("decision", "").upper()
+ 
+        if decision == "MANUAL":
+            print("[MANAGER] Operator chose MANUAL collection — closing session as COMPLETED")
+            logger.warning("Operator chose MANUAL collection — closing session as COMPLETED")
+ 
+            self._sample_info["collection_mode"] = "MANUAL"
+            self._sample_info["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            db_update_sample_info(self.uid, self._sample_info)
+ 
+            db_update_plc_comm(self.uid, State.COMPLETE_FINAL.name)
+            self._barrier(action="green_signal")
+            time.sleep(1)
+            self._sampler(action="sample_cycle_stop")
+            self._goto(State.COMPLETE_FINAL)
+            return
+ 
+        if decision == "CONTINUE":
+            print("[MANAGER] Operator chose CONTINUE — trying a new position")
+            logger.warning("Operator chose CONTINUE — trying a new position")
+ 
+            self._ai_blocked_pos = None
+            self._force_home_next = True      # recover from a known reference
+            db_update_plc_comm(self.uid, State.CYCLE_POSITION.name)
+            self._goto(State.CYCLE_POSITION)
+            return
+ 
+        if self._elapsed() > AI_DECISION_TIMEOUT:
+            print("[MANAGER] No operator decision — continuing with a new position")
+            logger.warning("No operator decision within timeout — continuing automatically")
+            self._ai_blocked_pos = None
+            self._force_home_next = True
+            db_update_plc_comm(self.uid, State.CYCLE_POSITION.name)
+            self._goto(State.CYCLE_POSITION)
+            return
+ 
+        print("[MANAGER] Waiting for operator decision on AI block ")
+        time.sleep(2)
+
+    def _handle_cycle_confirm(self):
+        msg = self._pop("plc_sampler/status")
+        print(f"[MANAGER] Cycle Waiting for position confirmation")
+        time.sleep(1)
+ 
+        if msg and msg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop detected waiting until reset !")
+            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
+            self._flush_topic("plc_sampler/status")
+            self._emergency_return_state = State.AUGER_HOME_POS
+            db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
+            self._goto(State.CYCLE_EMERGENCY_WAIT)
+            return
+ 
         if msg and msg.get("status") == "position_set":
-            print("[MANAGER] Auger positioned — waiting for AI confirmation ")
-
-            # if self.ai_model:
-            #     try: self._confirm_auger_position_with_movement_loop(self.positions[self._current_sample_index]["area"])
-            #     except: pass
-
+            print("[MANAGER] Auger positioned — running AI confirmation ")
+ 
+            pos = self.positions[self._current_sample_index]
+ 
+            confirmed = True
+            if AI_CONFIRM_ENABLED and self.ai_model:
+                confirmed = self._confirm_position_before_start(pos["area"])
+ 
+            if not confirmed:
+                # ── AI could not see the auger / coal clearly ────────────────
+                self._record_attempt(pos, "FAILED", "AI_OBSTRUCTION")
+                self._ai_blocked_pos = self.positions.pop()   # discard this point
+                self._ai_block_count += 1
+ 
+                print("[MANAGER] AI BLOCKED — waiting for operator decision")
+                logger.warning(f"AI blocked at {self._ai_blocked_pos} — waiting for operator decision")
+ 
+                self._flush_topic(TOPIC_DECISION)             # ignore stale choices
+                db_update_plc_comm(self.uid, State.AI_BLOCKED_WAIT.name)
+                self._goto(State.AI_BLOCKED_WAIT)
+                return
+ 
+            # ── Cycle start is only given past this point ────────────────────
             cycle_num = self._successful_cycles + 1
             self.cycle = cycle_num
             self._sampler(action="start_cycle", cycle=cycle_num)
             print("[MANAGER] CYCLE START GIVEN !!!")
             logger.debug("Position set, cycle start given")
-            time.sleep(1)  # settle time after cycle start (was 10s)
+            time.sleep(1)
             self._goto(State.CYCLE_CAPTURE)
             return
-        
+ 
         if self._elapsed() > POSITION_CONFIRMATION_TIMEOUT:
-            print("[MANAGER] Position confirmation timeout — starting cycle")
-            logger.debug("Position confirmation timeout — starting cycle")
-            print("[MANAGER] Retrying with different position ")
-            self.positions.pop()
-            self._force_home_next = True   # Recover via home — position not trusted
+            print("[MANAGER] Position confirmation timeout — retrying with different position")
+            logger.debug("Position confirmation timeout")
+            bad = self.positions.pop()
+            self._record_attempt(bad, "FAILED", "POSITION_TIMEOUT")
+            self._force_home_next = True
             time.sleep(1)
             self._goto(State.CYCLE_POSITION)
 
@@ -1201,85 +1478,153 @@ class Manager:
         self._cam(action="cam3_single", path=self.paths[f"SAMPLE_{self.cycle}_IMG_PATH"])
         self._goto(State.CYCLE_DONE)
 
-    def _handle_cycle_done(self):
-        time.sleep(1)  # PLC now PUSHES sample_cycle_complete / hard_material_detected — poll fast to catch it
-
-        msg = self._pop("plc_sampler/status")
-        if msg and msg.get("status") == "emergency_stop":
-            print("[MANAGER] Emergency stop detected waiting until reset !")
-            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
-            self._flush_topic("plc_sampler/status")  # drop stale queued messages
+    def _handle_hard_blocked_wait(self):
+        """
+        Hard material was hit twice in a row. The UI shows a popup telling the
+        operator to collect manually; the web app publishes the acknowledgement
+        on `manager/decision`.
+ 
+        On MANUAL (the only offered choice) the session is closed out and
+        marked COMPLETED, exactly like the AI-blocked manual path.
+ 
+        If nobody answers within HARD_DECISION_TIMEOUT the manager defaults to
+        MANUAL rather than resuming: continuing would drive the auger back into
+        material the PLC has already reported as hard, twice.
+        """
+        # Emergency still wins while waiting
+        emg = self._pop("plc_sampler/status")
+        if emg and emg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop while waiting for hard-material decision")
+            logger.warning("Emergency stop while waiting for hard-material decision")
+            self._flush_topic("plc_sampler/status")
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
+ 
+        msg = self._pop(TOPIC_DECISION)
+        decision = (msg or {}).get("decision", "").upper()
+        timed_out = self._elapsed() > HARD_DECISION_TIMEOUT
+ 
+        if decision == "CONTINUE":
+            # Kept for completeness — the popup does not offer this, but an
+            # operator with dashboard access could still send it deliberately.
+            print("[MANAGER] Operator chose CONTINUE after hard material — new position")
+            logger.warning("Operator chose CONTINUE after hard material — new position")
+            self._consecutive_hard = 0
+            self._hard_retries     = 0
+            self._hard_retry_pos   = None
+            self._force_home_next  = True
+            db_update_plc_comm(self.uid, State.CYCLE_POSITION.name)
+            self._goto(State.CYCLE_POSITION)
+            return
+ 
+        if decision == "MANUAL" or timed_out:
+            if timed_out:
+                print("[MANAGER] No operator response — defaulting to MANUAL collection")
+                logger.warning("No operator response to hard-material popup — defaulting to MANUAL")
+            else:
+                print("[MANAGER] Operator acknowledged — MANUAL collection, marking COMPLETED")
+                logger.warning("Operator acknowledged hard material — MANUAL collection")
+ 
+            self._sample_info["collection_mode"] = "MANUAL"
+            self._sample_info["manual_reason"]   = "HARD_MATERIAL"
+            self._sample_info["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            db_update_sample_info(self.uid, self._sample_info)
+ 
+            db_update_plc_comm(self.uid, State.COMPLETE_FINAL.name)
+            self._barrier(action="green_signal")
+            time.sleep(1)
+            self._sampler(action="sample_cycle_stop")
+            self._goto(State.COMPLETE_FINAL)
+            return
+ 
+        print("[MANAGER] Waiting for operator acknowledgement (hard material) ")
+        time.sleep(2)
 
+    def _handle_cycle_done(self):
+        time.sleep(1)
+ 
+        msg = self._pop("plc_sampler/status")
+        if msg and msg.get("status") == "emergency_stop":
+            print("[MANAGER] Emergency stop detected waiting until reset !")
+            logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
+            self._flush_topic("plc_sampler/status")
+            self._emergency_return_state = State.AUGER_HOME_POS
+            db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
+            self._goto(State.CYCLE_EMERGENCY_WAIT)
+            return
+ 
         if msg and msg.get("status", "") == "sample_cycle_complete":
-
-            # Completion is detected on the sampler side via Z_UP FB 1 -> 0 -> 1
             print(f"[MANAGER] Cycle {self.cycle} completed (Z_UP FB 1->0->1)")
             logger.debug(f"Cycle {self.cycle} completed (Z_UP FB 1->0->1)")
+ 
+            self._record_attempt(self.positions[self._current_sample_index], "SUCCESS")
+ 
             self._successful_cycles += 1
             self._current_sample_index += 1
-            self._hard_retries = 0          # NEW: good sample — clear hard-retry counter
-
+            self._hard_retries = 0
+            self._hard_retries     = 0
+            self._consecutive_hard = 0     # a good sample breaks the streak
+ 
             if self._successful_cycles >= TOTAL_CYCLES:
                 self._barrier(action="green_signal")
                 time.sleep(1)
                 print(f"[MANAGER] All {TOTAL_CYCLES} successful cycles completed.")
                 logger.debug(f"All {TOTAL_CYCLES} successful cycles completed.")
-                # NEW PROCESS: the auger stays at the last position — go straight
-                # to SAMPLE_COLLECTION, which waits 1 minute then writes cycle stop.
                 self._goto(State.SAMPLE_COLLECTION)
             else:
                 print(f"[MANAGER] Moving DIRECTLY to next sampling position (no homing) ")
                 self._goto(State.CYCLE_POSITION)
-
-        # ── NEW: HARD MATERIAL — Z came back up (z_up=1) WITH hard material=1 ──
+            return
+        
         elif msg and msg.get("status", "") == "hard_material_detected":
-
-            self._hard_retries += 1
-            bad = self.positions.pop()   # discard the failed point — cycle NOT counted,
-                                         # _successful_cycles / _current_sample_index untouched
+            self._hard_retries     += 1
+            self._consecutive_hard += 1
+ 
+            bad = self.positions.pop()
+            self._record_attempt(bad, "FAILED", "HARD_MATERIAL")
+ 
             print(f"[MANAGER] HARD MATERIAL at {bad} — cycle {self.cycle} NOT counted "
-                  f"(retry {self._hard_retries}/{HARD_MATERIAL_MAX_RETRIES})")
-            logger.warning(f"Hard material at {bad} — cycle not counted (retry {self._hard_retries}/{HARD_MATERIAL_MAX_RETRIES})")
-
-            if self._hard_retries <= HARD_MATERIAL_MAX_RETRIES:
-                # Get another X,Y NEARBY — not more than 10% shift on X and Y.
-                # Z is back up and the move completed normally, so the tracked
-                # position is still valid — the retry travels DIRECT (no homing).
-                self._hard_retry_pos = get_nearby_position(bad, prev_points=self.positions)
-                print(f"[MANAGER] Retrying at nearby point {self._hard_retry_pos}")
-                logger.debug(f"Retrying at nearby point {self._hard_retry_pos}")
-            else:
-                # Whole neighbourhood seems hard — abandon it, pick a fresh
-                # area through the normal generator, and recover via home.
-                print("[MANAGER] Too many hard-material hits — picking a FRESH area via home")
-                logger.warning("Too many hard-material hits — picking a fresh area via home")
-                self._hard_retries   = 0
-                self._hard_retry_pos = None
-                self._force_home_next = True
-
+                  f"(consecutive {self._consecutive_hard}/{HARD_MATERIAL_CONSECUTIVE_LIMIT})")
+            logger.warning(f"Hard material at {bad} — consecutive "
+                           f"{self._consecutive_hard}/{HARD_MATERIAL_CONSECUTIVE_LIMIT}")
+ 
+            # ── Two in a row: stop probing, hand over to the operator ────────
+            if self._consecutive_hard >= HARD_MATERIAL_CONSECUTIVE_LIMIT:
+                print("[MANAGER] HARD MATERIAL TWICE IN A ROW — waiting for operator")
+                logger.warning("Hard material twice in a row — waiting for operator decision")
+ 
+                self._flush_topic(TOPIC_DECISION)      # ignore stale choices
+                db_update_plc_comm(self.uid, State.HARD_BLOCKED_WAIT.name)
+                self._goto(State.HARD_BLOCKED_WAIT)
+                return
+ 
+            # ── First hit: retry at a nearby point as before ─────────────────
+            self._hard_retry_pos = get_nearby_position(bad, prev_points=self.positions)
+            print(f"[MANAGER] Retrying at nearby point {self._hard_retry_pos}")
+            logger.debug(f"Retrying at nearby point {self._hard_retry_pos}")
+ 
             self._goto(State.CYCLE_POSITION)
             return
-
+ 
         elif msg and msg.get("status", "") == "cycle_error":
             print(f"[MANAGER] Cycle error: {msg.get('msg')}")
             print("[MANAGER] Retrying with different position ")
-            self.positions.pop()
-            self._force_home_next = True   # Recover via home — position not trusted
+            bad = self.positions.pop()
+            self._record_attempt(bad, "FAILED", "CYCLE_ERROR")
+            self._force_home_next = True
             self._goto(State.CYCLE_POSITION)
-
+            return
+ 
         if self._elapsed() > SAMPLE_CYCLE_TIMEOUT:
             print("[MANAGER] Cycle timeout — moving to next position")
-            self.positions.pop()
-            self._force_home_next = True   # Recover via home — position not trusted
+            bad = self.positions.pop()
+            self._record_attempt(bad, "FAILED", "CYCLE_TIMEOUT")
+            self._force_home_next = True
             self._goto(State.CYCLE_POSITION)
         else:
             print("[MANAGER] Cycle in progress — waiting ")
-            # Polls the sampler — the reply continues with ONE of:
-            #   sample_cycle_complete | hard_material_detected | sample_cycle_not_complete
             self._sampler(action="check_sample_cycle_complete")
             time.sleep(2)
             
@@ -1467,7 +1812,11 @@ class Manager:
         self._new_vehicle_mail_sent = False
         self._final_home_confirmed = False   # auger home + CYCLE_COMPLETE=1 seen
         self._final_home_at        = 0.0     # timestamp that happened
-        self._last_home_poll       = 0.0     # last check_home_status poll
+        self._last_home_poll       = 0.0     # last check_home_status poll 
+        self._sample_info    = self._new_sample_info()
+        self._ai_blocked_pos = None
+        self._ai_block_count = 0
+        self._consecutive_hard = 0     # a good sample breaks the streak
         self._goto(State.IDLE)
         print("[MANAGER] Ready for next vehicle")
 

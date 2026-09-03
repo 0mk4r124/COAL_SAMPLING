@@ -149,6 +149,7 @@
                                 <th>SAMPLE IMAGE 1</th>
                                 <th>SAMPLE IMAGE 2</th>
                                 <th>SAMPLE IMAGE 3</th>
+                                <th>SAMPLE MAP</th>
                                 <th>REPORT</th>
                                 <th>PRINT</th>
                             </tr>
@@ -567,5 +568,141 @@
         </div>
     </div>
 </div>
+
+<!-- AI Position Blocked — operator decision required -->
+<div class="modal fade" id="aiBlockedModal" tabindex="-1" aria-hidden="true"
+     data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-5 border-warning">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-eye-slash"></i> AI CANNOT CONFIRM AUGER POSITION
+                </h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <strong>The AI cannot see the objects clearly — something appears to be
+                    between the auger and the coal.</strong>
+                </div>
+                <p class="fs-5">
+                    The sampling cycle has <strong>not</strong> been started at this position.
+                    The auger is holding still and waiting for your decision.
+                </p>
+                <p class="fs-6 mb-1"><strong id="aiBlockedVehicle" class="text-dark"></strong></p>
+                <p class="fs-6 text-muted">Choose how to proceed:</p>
+                <ul class="fs-6">
+                    <li><strong>Continue</strong> — the auger moves to a different position
+                        and carries on collecting samples automatically.</li>
+                    <li><strong>Manual collection</strong> — you collect the sample by hand;
+                        the vehicle is released and marked as <strong>COMPLETED</strong>.</li>
+                </ul>
+            </div>
+            <div class="modal-footer gap-2">
+                <button type="button" class="btn btn-success btn-lg" id="aiContinueBtn"
+                        onclick="handleAiDecision('continue')">
+                    <i class="fas fa-redo"></i> Continue With New Position
+                </button>
+                <button type="button" class="btn btn-warning btn-lg" id="aiManualBtn"
+                        onclick="handleAiDecision('manual')">
+                    <i class="fas fa-hand-paper"></i> Manual Sample Collection
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+ 
+
+ 
+<!-- Hard Material Detected — manual collection required -->
+<div class="modal fade" id="hardMaterialModal" tabindex="-1" aria-hidden="true"
+     data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-5 border-primary">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-gem"></i> HARD MATERIAL DETECTED
+                </h5>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-primary">
+                    <strong>Hard material was detected twice in a row in the truck body.</strong>
+                </div>
+                <p class="fs-5">
+                    The auger could not penetrate the load at two consecutive positions.
+                    Further automatic attempts have been stopped to protect the auger.
+                </p>
+                <p class="fs-6 mb-1"><strong id="hardBlockedVehicle" class="text-dark"></strong></p>
+                <p class="fs-5 fw-semibold text-primary">
+                    Please collect the sample manually.
+                </p>
+                <p class="fs-6 text-muted">
+                    Once you acknowledge, the vehicle will be released and this
+                    sampling session will be marked as <strong>COMPLETED</strong>.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary btn-lg" id="hardManualBtn"
+                        onclick="handleHardMaterialDecision()">
+                    <i class="fas fa-hand-paper"></i> Collected Manually — Mark Completed
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+ 
+ 
+<!-- Sample Map — where samples were taken / attempted  (REPLACES the earlier one) -->
+<div class="modal fade" id="sampleMapModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title fw-bold" id="sampleMapTitle">Sample Map</h5>
+                <button type="button" class="btn-close btn-close-white"
+                        data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+ 
+            <div class="modal-body">
+ 
+                <!-- Truck diagram: body + cabin (head) -->
+                <div class="truck-diagram">
+                    <div class="truck-body" id="sampleMapBody">
+                        <div class="truck-body-label">TRUCK BODY</div>
+                    </div>
+                    <div class="truck-cabin">
+                        <span class="truck-cabin-label">HEAD</span>
+                    </div>
+                </div>
+ 
+                <!-- Legend -->
+                <div class="d-flex justify-content-center flex-wrap gap-4 mt-3 small">
+                    <span><span class="sample-dot-legend legend-ok"></span> Sample collected</span>
+                    <span><span class="sample-dot-legend legend-fail"></span> Failed attempt</span>
+                    <span><span class="sample-dot-legend legend-hard"></span> Hard material</span>
+                </div>
+ 
+                <!-- Dot / row pagination (shown only when there are more than 8 attempts) -->
+                <div id="sampleMapPager"
+                     class="d-flex justify-content-between align-items-center mt-3 d-none">
+                    <span class="text-muted small" id="sampleMapRange"></span>
+                    <div class="btn-group btn-group-sm">
+                        <button class="btn btn-outline-dark" id="sampleMapPrev"
+                                onclick="sampleMapPage(-1)">&laquo; Prev</button>
+                        <button class="btn btn-outline-dark" id="sampleMapNext"
+                                onclick="sampleMapPage(1)">Next &raquo;</button>
+                    </div>
+                </div>
+ 
+                <!-- Summary + attempt list -->
+                <div id="sampleMapSummary" class="mt-3"></div>
+ 
+            </div>
+ 
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+ 
 
 {% endblock %}
