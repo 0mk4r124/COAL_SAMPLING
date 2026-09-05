@@ -945,23 +945,23 @@ def ai_position_decision(request):
  
         if not uid:
             return JsonResponse({"success": False, "error": "uid is required"}, status=400)
- 
-        # Only answer a session that is actually waiting — protects against a
-        # stale browser tab replaying an old popup into a fresh cycle.
+
+        # Only answer a session that is actually waiting
         plc = PLC_COMM.objects.filter(uid=uid).first()
         if not plc or plc.state not in ("AI_BLOCKED_WAIT", "HARD_BLOCKED_WAIT"):
             return JsonResponse({
                 "success": False,
                 "error": "This session is no longer waiting for a decision",
             }, status=409)
- 
-        mqtt = MQTT("MANAGER_AI_DECISION")
-        mqtt.publish("manager/decision", {
-            "action":   "ai_decision",
-            "decision": decision,
-            "uid":      uid,
-        })
- 
+
+        # The web app talks to the manager through PLC_COMM, not MQTT —
+        # MQTT is the script-to-script bus. A committed row cannot be lost
+        # the way a QoS 0 publish from a short-lived client can.
+        plc.ai_decision    = decision          # "CONTINUE" or "MANUAL"
+        plc.ai_decision_at = timezone.now()
+        plc.updated        = timezone.now()
+        plc.save(update_fields=["ai_decision", "ai_decision_at", "updated"])
+
         return JsonResponse({"success": True, "decision": decision, "uid": uid})
  
     except Exception as e:

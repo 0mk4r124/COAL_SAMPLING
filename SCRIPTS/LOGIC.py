@@ -34,9 +34,20 @@ logger = initializeLogger("LOGIC_MANAGER", LOGS_PATH=LOGS_PATH)
 _inference_model = None
 
 THRESHOLD_RATIO = 2 / 3
+DEBUG_DIR = os.path.join(BASE_FILE_PATH, "TEMP_IMG")
+DEBUG_SAVE_LATEST = True
 
 # Model is loaded once and reused (loading MASKRCNN repeatedly is expensive)
 _model = None
+
+# ── CAM1 region rules ─────────────────────────────────────────────────────────
+# Classes that MUST fully contain the yellow box for the position to be valid.
+CAM1_REQUIRED_CLASSES = {"COAL"}
+
+# Classes that are neither required nor treated as an obstruction — they are
+# skipped entirely. TRUCK_BODY always surrounds the coal, so demanding it added
+# nothing and made the check fail whenever its box was cropped by the frame.
+CAM1_IGNORED_CLASSES = {"TRUCK_BODY"}
 
 
 def _get_model():
@@ -163,6 +174,41 @@ def initialize_ai_model():
         print(f"ERROR: AI Model initialization failed: {e}")
         return False
 
+def _save_debug(img, path: str, tag: str = "") -> bool:
+    """
+    Write a debug image and CONFIRM it landed. cv2.imwrite returns False on a
+    missing folder or a bad path and raises nothing, so silent failures here
+    are exactly why debug images appear not to update.
+    """
+    try:
+        if img is None:
+            logger.warning(f"DEBUG {tag}: image is None, nothing written ({path})")
+            return False
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ok = cv2.imwrite(path, img)
+
+        if ok and os.path.exists(path):
+            logger.debug(f"DEBUG {tag}: wrote {path} ({os.path.getsize(path)//1024} KB)")
+            return True
+
+        logger.error(f"DEBUG {tag}: cv2.imwrite FAILED for {path}")
+        return False
+    except Exception as e:
+        logger.error(f"DEBUG {tag}: write error for {path}: {e}", exc_info=True)
+        return False
+
+def _debug_paths(image_path: str, suffix: str) -> list:
+    """Session-folder path (per-attempt record) + fixed TEMP_IMG path (latest)."""
+    base = os.path.splitext(image_path)[0]
+    paths = [f"{base}_{suffix}.jpg"]
+
+    if DEBUG_SAVE_LATEST:
+        cam = os.path.basename(base).split("_")[0]          # CAM1 / CAM3
+        paths.append(os.path.join(DEBUG_DIR, f"{cam}_REDUCED_{suffix}.jpg"))
+
+    return paths
+
 def confirm_auger_position(cam1_image_path: str, cam2_image_path: str, target_area: int) -> bool:
     try:
         if _inference_model is None:
@@ -193,71 +239,111 @@ def confirm_auger_position(cam1_image_path: str, cam2_image_path: str, target_ar
         logger.error(f"Error in auger position confirmation: {e}", exc_info=True)
         print(f"ERROR: Error in auger position confirmation: {e}")
         return False
-
 def _validate_cam1_region(image_path: str) -> bool:
+    """
+    CAM1 check: the yellow box (bottom-middle ROI) must sit entirely inside a
+    COAL detection, and nothing unexpected may cover it. TRUCK_BODY is ignored.
+
+    Debug output (written to the session folder AND to DEBUG/CAMx_latest_*):
+      _masked.jpg — raw model output
+      _vis.jpg    — yellow ROI, every detection, and the verdict
+    """
     failed = False
+    fail_reason = ""
+
     try:
         image = cv2.imread(image_path)
         if image is None:
             logger.error(f"Failed to read CAM1 image: {image_path}")
             return False
-        
+
         vis_img = image.copy()
         height, width = image.shape[:2]
-        
-        # Define Yellow Box (Region of Interest)
+
         y_x1 = int(width * 0.35)
         y_x2 = int(width * 0.65)
         y_y1 = int(height * 0.50)
         y_y2 = int(height * 0.80)
-        
+
         logger.debug(f"CAM1 Yellow Box: x=[{y_x1}-{y_x2}], y=[{y_y1}-{y_y2}]")
         cv2.rectangle(vis_img, (y_x1, y_y1), (y_x2, y_y2), (0, 255, 255), 4)
-        
-        # Run AI inference
+
         masked_img, labellist = _inference_model.run_inference(image)
-        cv2.imwrite(f"{image_path.split('.')[0]}_masked.jpg", masked_img)
-        
+        for p in _debug_paths(image_path, "masked"):
+            _save_debug(masked_img, p, "CAM1 masked")
+
         if not labellist:
             logger.warning("CAM1: No objects detected")
-            cv2.imwrite(f"{image_path.split('.')[0]}_vis.jpg", vis_img)
+            cv2.putText(vis_img, "FAIL: no detections", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+            for p in _debug_paths(image_path, "vis"):
+                _save_debug(vis_img, p, "CAM1 vis")
             return False
-        
-        allowed_classes = {"COAL", "TRUCK_BODY"}
+
+        logger.debug(f"CAM1: {len(labellist)} detections: "
+                     f"{[d[5] for d in labellist]}")
+
         found_classes = set()
         for detection in labellist:
-            # if len(detection) < 6:
-            #     continue
-                
             class_name = detection[5]
-            x1 = int(detection[3])
-            y1 = int(detection[1])
-            x2 = int(detection[4])
-            y2 = int(detection[2])
+            x1 = int(detection[3]); y1 = int(detection[1])
+            x2 = int(detection[4]); y2 = int(detection[2])
 
-            if (y_x1 >= x1 and y_x2 <= x2 and y_y1 >= y1 and y_y2 <= y2):
-                logger.info(f"CAM1: Yellow box is 100% inside green box {class_name}")
+            contains_roi = (y_x1 >= x1 and y_x2 <= x2 and y_y1 >= y1 and y_y2 <= y2)
+
+            # Draw EVERY detection. Boxes that don't contain the ROI are the
+            # ones that explain a failure, and they used to be invisible.
+            if not contains_roi:
+                cv2.rectangle(vis_img, (x1, y1), (x2, y2), (140, 140, 140), 1)
+                cv2.putText(vis_img, class_name, (x1, max(y1 - 6, 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (140, 140, 140), 1)
+                logger.debug(f"CAM1: {class_name} does NOT contain the ROI "
+                             f"(box x=[{x1}-{x2}] y=[{y1}-{y2}])")
+                continue
+
+            if class_name in CAM1_IGNORED_CLASSES:
+                logger.debug(f"CAM1: Ignoring {class_name} covering the yellow box")
+                cv2.rectangle(vis_img, (x1, y1), (x2, y2), (200, 150, 0), 2)
+                cv2.putText(vis_img, f"{class_name} (ignored)", (x1, max(y1 - 6, 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 150, 0), 2)
+                continue
+
+            logger.info(f"CAM1: Yellow box is 100% inside green box {class_name}")
+
+            if class_name in CAM1_REQUIRED_CLASSES:
                 found_classes.add(class_name)
                 cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                if class_name not in allowed_classes:
-                    logger.warning(f"CAM1: Invalid class {class_name} detected inside yellow box")
-                    cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 0, 255), 3)  # Red for invalid
-                    failed = True
-                    break
-                else:
-                    cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 3)  # Green for allowed
-                    continue
-    
-        # Save visualization
-        if not failed:
-            if not allowed_classes.issubset(found_classes):
-                missing = allowed_classes - found_classes
-                logger.warning(f"CAM1: Missing required classes inside yellow box: {missing}")
-                failed = True
-        cv2.imwrite(f"{image_path.split('.')[0]}_vis.jpg", vis_img)
-        logger.debug(f"CAM1: Detection results saved to {image_path.split('.')[0]}_vis.jpg")
+                cv2.putText(vis_img, f"{class_name} OK", (x1, max(y1 - 6, 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                continue
+
+            logger.warning(f"CAM1: Obstruction — {class_name} over the yellow box")
+            cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            cv2.putText(vis_img, f"{class_name} BLOCKING", (x1, max(y1 - 6, 12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            failed = True
+            fail_reason = f"obstruction: {class_name}"
+            break
+
+        if not failed and not CAM1_REQUIRED_CLASSES.issubset(found_classes):
+            missing = CAM1_REQUIRED_CLASSES - found_classes
+            logger.warning(f"CAM1: Missing required classes inside yellow box: {missing}")
+            failed = True
+            fail_reason = f"missing: {', '.join(sorted(missing))}"
+
+        # Verdict banner — makes a folder of images scannable at a glance
+        verdict = "FAIL" if failed else "PASS"
+        colour  = (0, 0, 255) if failed else (0, 200, 0)
+        cv2.putText(vis_img, f"{verdict}  {fail_reason}", (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, colour, 3)
+        cv2.putText(vis_img, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    (20, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        for p in _debug_paths(image_path, "vis"):
+            _save_debug(vis_img, p, "CAM1 vis")
+
         return not failed
-            
+
     except Exception as e:
         logger.error(f"Error in CAM1 validation: {e}", exc_info=True)
         print(f"ERROR: CAM1 validation error: {e}")

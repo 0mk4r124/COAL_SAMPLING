@@ -18,7 +18,7 @@ urlpatterns = [
     path('print_current_vehicle/', print_current_vehicle, name='print_current_vehicle'),
     path('stop_print_job/', stop_print_job, name='stop_print_job'),
     path('retake_failed_cycle/', retake_failed_cycle, name='retake_failed_cycle'),
-    path('api/ai_position_decision/', ai_position_decision, name='ai_position_decision'),
+    path('ai_position_decision/', ai_position_decision, name='ai_position_decision'),
 
     path('health_status/', health_status, name='health_status'),
     path('live-ip-camera', live_ip_camera, name='live-ip-camera'),

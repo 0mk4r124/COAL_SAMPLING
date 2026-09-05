@@ -63,10 +63,10 @@ HARD_RETRY_MAX_SHIFT      = 10  # Max % offset on X and Y for the nearby retry p
 HARD_MATERIAL_MAX_RETRIES = 3   # After this many consecutive hard hits, give up "nearby" and pick a fresh area via home
  
 # ── AI auger position confirmation (before cycle start) ───────────────────────
-AI_CONFIRM_ENABLED  = False   # False -> skip the check, start the cycle as before
+AI_CONFIRM_ENABLED  = True   # False -> skip the check, start the cycle as before
 AI_CONFIRM_RETRIES  = 3      # attempts at the SAME position (fresh capture each time)
 AI_CONFIRM_DELAY    = 2      # seconds between attempts
-TEMP_IMG_MAX_AGE = 15   # seconds — the background loop rewrites every ~1s,
+TEMP_IMG_MAX_AGE = 2   # seconds — the background loop rewrites every ~1s,
                         # so anything older means that camera thread is dead
 CAM_CMD_GAP      = 0.4  # gap between the two cam commands (see note below)
  
@@ -79,6 +79,13 @@ HARD_MATERIAL_CONSECUTIVE_LIMIT = 2
  
 # If nobody answers the popup, default to MANUAL (see the note in the handler)
 HARD_DECISION_TIMEOUT = 600     # 10 minutes
+# ── Sample image collection (training data) ───────────────────────────────────
+SAMPLE_CAPTURE_ENABLED  = False
+SAMPLE_CAPTURE_CAMS     = ("CAM1", "CAM2", "CAM3")
+SAMPLE_CAPTURE_INTERVAL = 1.0    # seconds between saves; the background camera
+                                 # threads refresh TEMP_IMG about once a second
+SAMPLE_CAPTURE_MAX_SECS = 120    # hard cap — a cycle runs ~60 s, so this can
+                                 # never outlive the cycle even if a stop is missed
 
 # ── Sampling geometry ─────────────────────────────────────────────────────────
 X_MIN, X_MAX = 35, 100   # X travel bounds, % of full travel
@@ -87,6 +94,7 @@ MIN_X_GAP    = 20        # Minimum X separation between the 3 sample points (%)
 
 BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 TEMP_IMG_PATH = os.path.join(BASE_FILE_PATH, "TEMP_IMG")
+RAW_IMG_PATH = os.path.join(BASE_FILE_PATH, "RAW_IMG")
 RESULT_IMG_PATH = os.path.join(BASE_FILE_PATH, "RESULT")
 INF_IMG = os.path.join(BASE_FILE_PATH, "INF")
 LOGS_PATH = os.path.join(BASE_FILE_PATH, "LOGS")
@@ -94,7 +102,7 @@ LOGS_PATH = os.path.join(BASE_FILE_PATH, "LOGS")
 TOPIC_DECISION = "manager/decision"
 IN_TOPICS = (
     "camera/status",
-    TOPIC_DECISION,
+    # TOPIC_DECISION,
     "plc_barrier/status",
     "plc_sampler/status",
     "rfid/status",
@@ -568,6 +576,48 @@ def db_update_sample_info(uid: str, info: dict) -> bool:
         if db: db.close()
     return False
 
+def db_read_decision(uid: str) -> str:
+    """Read the operator's decision from PLC_COMM (written by the web app)."""
+    db = None
+    try:
+        db = _db_connect()
+        cur = db.cursor()
+        cur.execute("SELECT AI_DECISION FROM PLC_COMM WHERE UID = %s", (uid,))
+        row = cur.fetchone()
+        if not row:
+            return ""
+        val = row["AI_DECISION"] if isinstance(row, dict) else row[0]
+        return (val or "").strip().upper()
+    except Exception as e:
+        print(f"[DB] db_read_decision error: {e}")
+        logger.error(f"{traceback.format_exc()}")
+    finally:
+        if db: db.close()
+    return ""
+
+
+def db_clear_decision(uid: str) -> bool:
+    """
+    Clear any stale decision. Called on ENTRY to a wait state so a choice left
+    over from an earlier block can't be consumed by the next one.
+    """
+    db = None
+    try:
+        db = _db_connect()
+        cur = db.cursor()
+        cur.execute(
+            "UPDATE PLC_COMM SET AI_DECISION = NULL, AI_DECISION_AT = NULL WHERE UID = %s",
+            (uid,)
+        )
+        db.commit()
+        return True
+    except Exception as e:
+        print(f"[DB] db_clear_decision error: {e}")
+        logger.error(f"{traceback.format_exc()}")
+    finally:
+        if db: db.close()
+    return False
+
 # ------------------------------------------------------------------------------
 class Manager:
 
@@ -624,6 +674,9 @@ class Manager:
         self._sample_info      = self._new_sample_info()
         self._ai_blocked_pos   = None    # position the AI rejected (for logging)
         self._ai_block_count   = 0       # how many times the AI has blocked this session
+        # self._stop_sample_capture()
+        self._capture_stop   = None
+        self._capture_thread = None
 
         # AI Model initialization
         if initialize_ai_model():
@@ -736,45 +789,130 @@ class Manager:
         logger.debug(f"Timeout -> cam1={cam1_done}, cam3={cam3_done}")
         return False
     
+    def _start_sample_capture(self, cycle: int):
+        """
+        Start collecting training frames for one sampling cycle.
+
+        Runs in a daemon thread that only COPIES the TEMP_IMG frames the
+        camera service already refreshes every second. It sends no MQTT
+        commands, so it cannot collide with the manager's own camera traffic,
+        and it touches no manager state beyond its own stop flag.
+
+        Safe to call repeatedly: an already-running capture is stopped first,
+        so cycles can never stack up into multiple loops.
+        """
+        if not SAMPLE_CAPTURE_ENABLED:
+            return
+
+        self._stop_sample_capture()          # never run two at once
+
+        uid   = self.uid
+        stop  = threading.Event()
+        self._capture_stop = stop
+
+        def _worker():
+            started   = time.time()
+            saved     = 0
+            last_mtime = {}                  # skip frames the camera hasn't refreshed
+
+            try:
+                while not stop.is_set():
+                    if (time.time() - started) > SAMPLE_CAPTURE_MAX_SECS:
+                        logger.warning(f"Sample capture hit the {SAMPLE_CAPTURE_MAX_SECS}s "
+                                       f"cap for cycle {cycle} — stopping")
+                        break
+
+                    for cam in SAMPLE_CAPTURE_CAMS:
+                        src = os.path.join(TEMP_IMG_PATH, f"{cam}_REDUCED.jpg")
+                        try:
+                            if not os.path.exists(src):
+                                continue
+
+                            mtime = os.path.getmtime(src)
+                            if last_mtime.get(cam) == mtime:
+                                continue     # same frame as last pass, don't duplicate
+                            last_mtime[cam] = mtime
+
+                            dest_dir = os.path.join(RAW_IMG_PATH, uid, cam)
+                            os.makedirs(dest_dir, exist_ok=True)
+                            stamp = datetime.now().strftime("%H%M%S_%f")[:-3]
+                            dest  = os.path.join(dest_dir, f"{uid}_c{cycle}_{stamp}.jpg")
+
+                            shutil.copy2(src, dest)
+                            saved += 1
+                        except Exception:
+                            # One bad frame must never kill the collection thread
+                            logger.error(f"Sample capture error for {cam}:\n{traceback.format_exc()}")
+
+                    stop.wait(SAMPLE_CAPTURE_INTERVAL)   # interruptible sleep
+
+            finally:
+                print(f"[MANAGER] Sample capture stopped for cycle {cycle} ({saved} frames)")
+                logger.debug(f"Sample capture stopped for cycle {cycle} ({saved} frames)")
+
+        self._capture_thread = threading.Thread(
+            target=_worker, name=f"SampleCapture-c{cycle}", daemon=True
+        )
+        self._capture_thread.start()
+        print(f"[MANAGER] Sample capture started for cycle {cycle}")
+        logger.debug(f"Sample capture started for cycle {cycle}")
+
+    def _stop_sample_capture(self):
+        """Signal the capture thread to finish. Never blocks the state machine."""
+        if self._capture_stop:
+            self._capture_stop.set()
+        self._capture_stop   = None
+        self._capture_thread = None
+
     def _capture_images_for_confirmation(self, loop_num: int, movement_type: str = "") -> tuple[str, str] | None:
         """
-        Get a CAM1 + CAM3 pair for the AI check.
+        Get a CAM1 + CAM3 pair for the AI check from TEMP_IMG.
 
-        Primary: request a fresh single capture from CAM_CAPTURE.
-        Fallback: use the TEMP_IMG/CAM*_REDUCED.jpg frames that the background
-        capture threads rewrite roughly once a second — the same images used
-        during testing. They are copied into the session folder so the AI's
-        _vis.jpg output is kept per session instead of overwriting TEMP_IMG.
+        No fresh single-capture request is made. CAM_CAPTURE's background
+        threads already rewrite TEMP_IMG/CAM*_REDUCED.jpg about once a second,
+        so those frames are as current as anything we could ask for — and the
+        request path cost a 10 s timeout on every attempt because CAM1's
+        command was being dropped (CAM_CAPTURE keeps one MQTT slot and the
+        cam3 publish overwrote the cam1 publish before its 50 ms poll).
+
+        The frames are copied into the session folder so the AI's _vis.jpg and
+        _masked.jpg outputs are kept per session instead of overwriting
+        TEMP_IMG, which the background threads would clobber a second later.
         """
         try:
             inf_dir = os.path.join(INF_IMG, self.date_file, self.uid)
             os.makedirs(inf_dir, exist_ok=True)
 
             suffix = f"_loop{loop_num}_{movement_type}" if movement_type else f"_loop{loop_num}"
-            cam1_path = os.path.join(inf_dir, f"CAM1{suffix}.jpg")
-            cam3_path = os.path.join(inf_dir, f"CAM3{suffix}.jpg")
+            cam1_dest = os.path.join(inf_dir, f"CAM1{suffix}.jpg")
+            cam3_dest = os.path.join(inf_dir, f"CAM3{suffix}.jpg")
 
-            print(f"[MANAGER] Capturing images (Loop {loop_num}, {movement_type})")
+            pairs = [("CAM1", os.path.join(TEMP_IMG_PATH, "CAM1_REDUCED.jpg"), cam1_dest),
+                     ("CAM3", os.path.join(TEMP_IMG_PATH, "CAM3_REDUCED.jpg"), cam3_dest)]
 
-            # CAM_CAPTURE keeps ONE incoming MQTT slot and polls it every 50 ms.
-            # Publishing both commands back to back overwrites the first, so
-            # CAM1 never fires. The gap lets its loop pick up cam1_single.
-            self._cam(action="cam1_single", cam="cam1", path=cam1_path)
-            time.sleep(CAM_CMD_GAP)
-            self._cam(action="cam3_single", cam="cam3", path=cam3_path)
+            # A frame older than TEMP_IMG_MAX_AGE means that camera's
+            # background thread has died. Running the AI on a minutes-old
+            # picture would be worse than reporting a failure.
+            for name, src, _dest in pairs:
+                if not os.path.exists(src):
+                    print(f"[MANAGER] TEMP image missing for {name}: {src}")
+                    logger.warning(f"TEMP image missing for {name}: {src}")
+                    return None
 
-            if self._wait_for_file(cam1_path, cam3_path):
-                print(f"[MANAGER] Capture OK: {cam1_path}, {cam3_path}")
-                logger.debug(f"Capture OK: {cam1_path}, {cam3_path}")
-                return (cam1_path, cam3_path)
+                age = time.time() - os.path.getmtime(src)
+                if age > TEMP_IMG_MAX_AGE:
+                    print(f"[MANAGER] TEMP image for {name} is stale ({age:.0f}s old)")
+                    logger.warning(f"TEMP image for {name} is stale ({age:.0f}s old)")
+                    return None
 
-            # ── Fallback: the continuously-refreshed TEMP_IMG frames ─────────
-            print("[MANAGER] Fresh capture failed — falling back to TEMP_IMG frames")
-            logger.warning("Fresh capture failed — falling back to TEMP_IMG frames")
-            return self._temp_image_pair(cam1_path, cam3_path)
+            for name, src, dest in pairs:
+                shutil.copy2(src, dest)
+
+            logger.debug(f"Using TEMP frames: {cam1_dest}, {cam3_dest}")
+            return (cam1_dest, cam3_dest)
 
         except Exception as e:
-            print(f"[MANAGER] Error capturing images: {e}")
+            print(f"[MANAGER] Error preparing confirmation images: {e}")
             logger.error(f"{traceback.format_exc()}")
             return None
 
@@ -1341,12 +1479,12 @@ class Manager:
     def _handle_ai_blocked_wait(self):
         """
         The AI could not confirm the auger position. The UI shows a popup with
-        two choices; the web app publishes the answer on `manager/decision`.
- 
+        two choices; the web app writes the answer into PLC_COMM.AI_DECISION.
+
           CONTINUE -> pick a fresh position and carry on sampling
           MANUAL   -> operator collects the sample by hand; the session is
                       closed out and marked COMPLETED
- 
+
         Emergency still takes priority, and an unanswered popup falls through
         to CONTINUE after AI_DECISION_TIMEOUT so a truck is never stranded.
         """
@@ -1360,35 +1498,39 @@ class Manager:
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
- 
-        msg = self._pop(TOPIC_DECISION)
-        decision = (msg or {}).get("decision", "").upper()
- 
+
+        # Operator decision comes from the DB, not MQTT
+        decision = db_read_decision(self.uid)
+        if decision:
+            print(f"[MANAGER] Operator decision received: {decision}")
+            logger.debug(f"Operator decision received: {decision}")
+            db_clear_decision(self.uid)          # consume it exactly once
+
         if decision == "MANUAL":
             print("[MANAGER] Operator chose MANUAL collection — closing session as COMPLETED")
             logger.warning("Operator chose MANUAL collection — closing session as COMPLETED")
- 
+
             self._sample_info["collection_mode"] = "MANUAL"
             self._sample_info["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             db_update_sample_info(self.uid, self._sample_info)
- 
+
             db_update_plc_comm(self.uid, State.COMPLETE_FINAL.name)
             self._barrier(action="green_signal")
             time.sleep(1)
             self._sampler(action="sample_cycle_stop")
             self._goto(State.COMPLETE_FINAL)
             return
- 
+
         if decision == "CONTINUE":
             print("[MANAGER] Operator chose CONTINUE — trying a new position")
             logger.warning("Operator chose CONTINUE — trying a new position")
- 
+
             self._ai_blocked_pos = None
             self._force_home_next = True      # recover from a known reference
             db_update_plc_comm(self.uid, State.CYCLE_POSITION.name)
             self._goto(State.CYCLE_POSITION)
             return
- 
+
         if self._elapsed() > AI_DECISION_TIMEOUT:
             print("[MANAGER] No operator decision — continuing with a new position")
             logger.warning("No operator decision within timeout — continuing automatically")
@@ -1397,7 +1539,7 @@ class Manager:
             db_update_plc_comm(self.uid, State.CYCLE_POSITION.name)
             self._goto(State.CYCLE_POSITION)
             return
- 
+
         print("[MANAGER] Waiting for operator decision on AI block ")
         time.sleep(2)
 
@@ -1433,7 +1575,8 @@ class Manager:
                 print("[MANAGER] AI BLOCKED — waiting for operator decision")
                 logger.warning(f"AI blocked at {self._ai_blocked_pos} — waiting for operator decision")
  
-                self._flush_topic(TOPIC_DECISION)             # ignore stale choices
+                # self._flush_topic(TOPIC_DECISION)             # ignore stale choices
+                db_clear_decision(self.uid)                   # ignore stale choices
                 db_update_plc_comm(self.uid, State.AI_BLOCKED_WAIT.name)
                 self._goto(State.AI_BLOCKED_WAIT)
                 return
@@ -1442,6 +1585,7 @@ class Manager:
             cycle_num = self._successful_cycles + 1
             self.cycle = cycle_num
             self._sampler(action="start_cycle", cycle=cycle_num)
+            self._start_sample_capture(cycle_num)      # NEW
             print("[MANAGER] CYCLE START GIVEN !!!")
             logger.debug("Position set, cycle start given")
             time.sleep(1)
@@ -1464,7 +1608,7 @@ class Manager:
         if msg and msg.get("status") == "emergency_stop":
             print("[MANAGER] Emergency stop detected waiting until reset !")
             logger.warning(f"Emergency stop detected in {self.state.name} — waiting until reset")
-            self._flush_topic("plc_sampler/status")  # drop stale queued messages
+            db_clear_decision(self.uid)  # drop stale queued messages
             self._emergency_return_state = State.AUGER_HOME_POS
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
@@ -1481,12 +1625,12 @@ class Manager:
     def _handle_hard_blocked_wait(self):
         """
         Hard material was hit twice in a row. The UI shows a popup telling the
-        operator to collect manually; the web app publishes the acknowledgement
-        on `manager/decision`.
- 
+        operator to collect manually; the web app writes the acknowledgement
+        into PLC_COMM.AI_DECISION.
+
         On MANUAL (the only offered choice) the session is closed out and
         marked COMPLETED, exactly like the AI-blocked manual path.
- 
+
         If nobody answers within HARD_DECISION_TIMEOUT the manager defaults to
         MANUAL rather than resuming: continuing would drive the auger back into
         material the PLC has already reported as hard, twice.
@@ -1501,14 +1645,19 @@ class Manager:
             db_update_plc_comm(self.uid, self.state.name, emergency="ACTIVE")
             self._goto(State.CYCLE_EMERGENCY_WAIT)
             return
- 
-        msg = self._pop(TOPIC_DECISION)
-        decision = (msg or {}).get("decision", "").upper()
+
+        # Operator decision comes from the DB, not MQTT
+        decision = db_read_decision(self.uid)
+        if decision:
+            print(f"[MANAGER] Hard-material decision received: {decision}")
+            logger.debug(f"Hard-material decision received: {decision}")
+            db_clear_decision(self.uid)          # consume it exactly once
+
         timed_out = self._elapsed() > HARD_DECISION_TIMEOUT
- 
+
         if decision == "CONTINUE":
-            # Kept for completeness — the popup does not offer this, but an
-            # operator with dashboard access could still send it deliberately.
+            # The popup does not offer this, but an operator with dashboard
+            # access could still send it deliberately.
             print("[MANAGER] Operator chose CONTINUE after hard material — new position")
             logger.warning("Operator chose CONTINUE after hard material — new position")
             self._consecutive_hard = 0
@@ -1518,7 +1667,7 @@ class Manager:
             db_update_plc_comm(self.uid, State.CYCLE_POSITION.name)
             self._goto(State.CYCLE_POSITION)
             return
- 
+
         if decision == "MANUAL" or timed_out:
             if timed_out:
                 print("[MANAGER] No operator response — defaulting to MANUAL collection")
@@ -1526,19 +1675,19 @@ class Manager:
             else:
                 print("[MANAGER] Operator acknowledged — MANUAL collection, marking COMPLETED")
                 logger.warning("Operator acknowledged hard material — MANUAL collection")
- 
+
             self._sample_info["collection_mode"] = "MANUAL"
             self._sample_info["manual_reason"]   = "HARD_MATERIAL"
             self._sample_info["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             db_update_sample_info(self.uid, self._sample_info)
- 
+
             db_update_plc_comm(self.uid, State.COMPLETE_FINAL.name)
             self._barrier(action="green_signal")
             time.sleep(1)
             self._sampler(action="sample_cycle_stop")
             self._goto(State.COMPLETE_FINAL)
             return
- 
+
         print("[MANAGER] Waiting for operator acknowledgement (hard material) ")
         time.sleep(2)
 
@@ -1595,7 +1744,7 @@ class Manager:
                 print("[MANAGER] HARD MATERIAL TWICE IN A ROW — waiting for operator")
                 logger.warning("Hard material twice in a row — waiting for operator decision")
  
-                self._flush_topic(TOPIC_DECISION)      # ignore stale choices
+                db_clear_decision(self.uid)            # ignore stale choices
                 db_update_plc_comm(self.uid, State.HARD_BLOCKED_WAIT.name)
                 self._goto(State.HARD_BLOCKED_WAIT)
                 return
@@ -1817,6 +1966,9 @@ class Manager:
         self._ai_blocked_pos = None
         self._ai_block_count = 0
         self._consecutive_hard = 0     # a good sample breaks the streak
+        self._stop_sample_capture()
+        self._capture_stop   = None
+        self._capture_thread = None
         self._goto(State.IDLE)
         print("[MANAGER] Ready for next vehicle")
 
