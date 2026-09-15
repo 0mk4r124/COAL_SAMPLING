@@ -1,18 +1,20 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# MAIN_MANAGER.py — HARD MATERIAL CHANGES
+# MAIN_MANAGER.py
 #
-# This file contains the COMPLETE replacement versions of every section of
-# MAIN_MANAGER.py that changes for the MATERIAL_HARD_STATUS feature.
-# Paste each section over the matching original section — everything else in
-# MAIN_MANAGER.py stays exactly as it is.
+# Coal sampling state machine.
 #
-# Sections:
-#   1. Tuning constants           -> add below the existing "# ── Tuning ──" block
-#   2. get_nearby_position()      -> add right after get_sample_positions()
-#   3. State-variable init        -> add wherever self.positions / _force_home_next
-#                                    are initialised (per-vehicle reset)
-#   4. _handle_cycle_position()   -> FULL replacement
-#   5. _handle_cycle_done()       -> FULL replacement
+# Sampling geometry (see the "Sampling geometry" block below):
+#   - X is drawn with the order statistics of three uniforms, so all three
+#     points are uniform over EVERY layout that satisfies MIN_X_GAP and each
+#     area gets the same amount of room to move. The old greedy draw spent the
+#     slack front-to-back, which pinned area 3 against the head end.
+#   - Y is rejection-sampled against MIN_Y_GAP, so two points can never land on
+#     the same line across the bed.
+#   - Every AI-obstruction / hard-material failure is remembered in
+#     self._avoid_points, and later points give that ground a wide berth.
+#   - A blocked point is retried in the OPPOSITE direction (Y flips to the far
+#     half of the bed, X moves to the far side of the bad column) instead of
+#     being nudged a few percent back into the same rock.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import os
@@ -59,9 +61,7 @@ FINAL_HOME_TIMEOUT    = 120   # Max wait for the auger to come home by itself af
 HOME_POLL_SEC         = 2     # How often to poll the home FBs / CYCLE_COMPLETE tag
 SET_BUCKET_WAIT_TIMEOUT = 120 # Wait up to x seconds for bucket set confirmation before aborting
 MOVEMENT_DURATION = 2 # Duration to move in each direction during auger position confirmation loops (in seconds)
-HARD_RETRY_MAX_SHIFT      = 10  # Max % offset on X and Y for the nearby retry point (user spec: not more than 10%)
-HARD_MATERIAL_MAX_RETRIES = 3   # After this many consecutive hard hits, give up "nearby" and pick a fresh area via home
- 
+
 # ── AI auger position confirmation (before cycle start) ───────────────────────
 AI_CONFIRM_ENABLED  = True   # False -> skip the check, start the cycle as before
 AI_CONFIRM_RETRIES  = 3      # attempts at the SAME position (fresh capture each time)
@@ -69,18 +69,19 @@ AI_CONFIRM_DELAY    = 2      # seconds between attempts
 TEMP_IMG_MAX_AGE = 2   # seconds — the background loop rewrites every ~1s,
                         # so anything older means that camera thread is dead
 CAM_CMD_GAP      = 0.4  # gap between the two cam commands (see note below)
- 
+
 # How long to wait for the operator's choice on the AI-blocked popup before
 # giving up on them and continuing automatically with a new position.
 AI_DECISION_TIMEOUT = 600    # 10 minutes
 # Two hard-material hits back to back mean the load is hard where we are
 # probing — retrying more just hammers the auger into rock.
 HARD_MATERIAL_CONSECUTIVE_LIMIT = 2
- 
+
 # If nobody answers the popup, default to MANUAL (see the note in the handler)
 HARD_DECISION_TIMEOUT = 600     # 10 minutes
+
 # ── Sample image collection (training data) ───────────────────────────────────
-SAMPLE_CAPTURE_ENABLED  = False
+SAMPLE_CAPTURE_ENABLED  = True
 SAMPLE_CAPTURE_CAMS     = ("CAM1", "CAM2", "CAM3")
 SAMPLE_CAPTURE_INTERVAL = 1.0    # seconds between saves; the background camera
                                  # threads refresh TEMP_IMG about once a second
@@ -88,9 +89,22 @@ SAMPLE_CAPTURE_MAX_SECS = 120    # hard cap — a cycle runs ~60 s, so this can
                                  # never outlive the cycle even if a stop is missed
 
 # ── Sampling geometry ─────────────────────────────────────────────────────────
-X_MIN, X_MAX = 35, 100   # X travel bounds, % of full travel
-Y_MIN, Y_MAX = 40, 80    # Y travel bounds, % of full travel
+X_MIN, X_MAX = 30, 100   # X travel bounds, % of full travel
+Y_MIN, Y_MAX = 25, 85    # Y travel bounds, % of full travel
 MIN_X_GAP    = 20        # Minimum X separation between the 3 sample points (%)
+
+# Anti-clustering. Three independent uniform draws sit in a near-straight line
+# often enough that the map stops looking random. These push the points apart
+# without making them predictable.
+MIN_Y_GAP       = 15     # Minimum Y separation between sample points (%)
+PICK_CANDIDATES = 60     # Rejection-sampling tries before best-effort fallback
+X_JITTER        = 4      # How far X may slide off its draw to dodge bad ground
+
+# Blocked-ground avoidance (AI obstruction / hard material)
+AVOID_RADIUS  = 14   # New points stay at least this far from any blocked point
+ALT_MIN_SHIFT = 12   # Minimum move away from the blocked point on a retry
+
+BLOCKING_REASONS = ("AI_OBSTRUCTION", "HARD_MATERIAL")
 
 BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 TEMP_IMG_PATH = os.path.join(BASE_FILE_PATH, "TEMP_IMG")
@@ -111,6 +125,12 @@ IN_TOPICS = (
 # Initialize logger
 logger = initializeLogger("MAIN_MANAGER", LOGS_PATH=LOGS_PATH)
 
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+def _dist(ax, ay, bx, by):
+    return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+
 def normalize_path(path: str) -> str:
     return path.replace("\\", "/")
 
@@ -129,15 +149,119 @@ def build_rfid_key(rfids, uid=None):
 
     return "|".join(rfids)
 
-def get_sample_positions(used_areas=None, prev_points=None):
+# ── Sample point selection ────────────────────────────────────────────────────
+
+def _x_slot(area, prev_points=None):
+    """
+    Feasible X window for `area`, i.e. the range that still honours MIN_X_GAP
+    against every point already placed AND reserves MIN_X_GAP for each area
+    still to come, so the last area can never be squeezed out of range.
+    """
+    x_lo = X_MIN
+    x_hi = X_MAX - (TOTAL_CYCLES - area) * MIN_X_GAP
+
+    for p in (prev_points or []):
+        pa = p.get("area")
+        if pa is None or pa == area:
+            continue
+        if pa < area:
+            x_lo = max(x_lo, p["x"] + MIN_X_GAP)
+        else:
+            x_hi = min(x_hi, p["x"] - MIN_X_GAP)
+
+    if x_lo > x_hi:
+        print(f"[MANAGER] X range collapsed for area {area} (lo={x_lo}, hi={x_hi}) — clamping")
+        logger.warning(f"X range collapsed for area {area} (lo={x_lo}, hi={x_hi})")
+        x_lo = x_hi = _clamp(x_lo, X_MIN, X_MAX)
+
+    return x_lo, x_hi
+
+def _x_draw(area, prev_points=None):
+    """
+    Random X for `area`, drawn so the three points are UNIFORM over every
+    layout that satisfies MIN_X_GAP — not just uniform over whatever range is
+    left after the previous point was placed.
+
+    Squeeze MIN_X_GAP out of the travel and the leftover slack is
+    X_MAX - X_MIN - 2*MIN_X_GAP. Splitting that slack with the order statistics
+    of three uniforms gives every area the same room to move. The old greedy
+    draw spent the slack front-to-back, which pinned area 3 up against the head
+    end and made the last point look fixed.
+    """
+    slack = X_MAX - X_MIN - MIN_X_GAP * (TOTAL_CYCLES - 1)
+    if slack <= 0:
+        return X_MIN + MIN_X_GAP * (area - 1)
+
+    # How much slack the areas before this one have already consumed
+    used = 0.0
+    for p in (prev_points or []):
+        pa = p.get("area")
+        if pa is None or pa >= area:
+            continue
+        used = max(used, p["x"] - X_MIN - MIN_X_GAP * (pa - 1))
+    used = _clamp(used, 0.0, float(slack))
+
+    remaining = max(1, TOTAL_CYCLES - area + 1)
+    u = used + (slack - used) * (1.0 - random.random() ** (1.0 / remaining))
+    return X_MIN + MIN_X_GAP * (area - 1) + u
+
+def _pick_point(x_lo, x_hi, y_lo, y_hi, area, prev_points=None, avoid=None,
+                min_y_gap=MIN_Y_GAP, avoid_radius=AVOID_RADIUS,
+                anchor=None, min_shift=0):
+    """
+    Draw a random (x, y) inside the window, rejecting candidates that cluster
+    with an existing sample point, sit on blocked ground, or fail to move far
+    enough away from `anchor`.
+
+    Every constraint is a PREFERENCE, not a hard rule: after PICK_CANDIDATES
+    tries the best-scoring candidate is returned. This can never fail to
+    produce a point and can never spin.
+    """
+    x_lo, x_hi = int(round(x_lo)), int(round(x_hi))
+    y_lo, y_hi = int(round(y_lo)), int(round(y_hi))
+    if x_lo > x_hi:
+        x_lo = x_hi = int(_clamp(x_lo, X_MIN, X_MAX))
+    if y_lo > y_hi:
+        y_lo = y_hi = int(_clamp(y_lo, Y_MIN, Y_MAX))
+
+    prev_ys = [p["y"] for p in (prev_points or [])
+               if p.get("area") != area and p.get("y") is not None]
+    avoid   = [a for a in (avoid or []) if a.get("x") is not None
+                                       and a.get("y") is not None]
+
+    best, best_score = None, None
+    for _ in range(PICK_CANDIDATES):
+        x = random.randint(x_lo, x_hi)
+        y = random.randint(y_lo, y_hi)
+
+        y_gap  = min((abs(y - py) for py in prev_ys), default=999.0)
+        a_dist = min((_dist(x, y, a["x"], a["y"]) for a in avoid), default=999.0)
+        shift  = _dist(x, y, anchor["x"], anchor["y"]) if anchor else 999.0
+
+        if y_gap >= min_y_gap and a_dist >= avoid_radius and shift >= min_shift:
+            return {"x": x, "y": y, "area": area}
+
+        # Blocked ground matters most, then getting clear of the bad point,
+        # then spreading out on Y.
+        score = (min(a_dist, avoid_radius),
+                 min(shift, min_shift),
+                 min(y_gap, min_y_gap))
+        if best_score is None or score > best_score:
+            best, best_score = {"x": x, "y": y, "area": area}, score
+
+    return best
+
+def get_sample_positions(used_areas=None, prev_points=None, avoid=None):
     """
     Return the next sampling point.
 
     Areas are taken IN ORDER: 1, then 2, then 3 (no random choice).
-    X moves left-to-right with at least MIN_X_GAP between consecutive points,
-    e.g. (41, 72, 92). The upper bound reserves MIN_X_GAP for each point still
-    to come, so the last area can never be squeezed out of range.
-    Y is free anywhere in its bounds.
+    X comes from _x_draw(), so all three points are uniform over every layout
+    that satisfies MIN_X_GAP and each area gets the same room to move.
+    Y is a free random draw that is rejected if it lands within MIN_Y_GAP of
+    another point's Y, so the three dots never line up across the bed.
+    Points that failed on AI obstruction or hard material are passed in
+    `avoid` and are given a wide berth.
     """
     if used_areas is None:
         used_areas = []
@@ -153,86 +277,69 @@ def get_sample_positions(used_areas=None, prev_points=None):
 
     area = available[0]                       # sequential: 1 -> 2 -> 3
 
-    # Lower bound: MIN_X_GAP past the right-most point already taken
-    x_lo = X_MIN
-    if prev_points:
-        x_lo = max(x_lo, max(p["x"] for p in prev_points) + MIN_X_GAP)
+    x_lo, x_hi = _x_slot(area, prev_points)
 
-    # Upper bound: leave room for the areas still to come
-    remaining_after = TOTAL_CYCLES - area
-    x_hi = X_MAX - (remaining_after * MIN_X_GAP)
+    # Narrow the feasible slot down to a window around the order-statistic
+    # draw, so X is random over the whole layout but still gets a few percent
+    # of wiggle while it hunts for a spot clear of blocked ground.
+    x = _x_draw(area, prev_points)
+    w_lo = _clamp(x - X_JITTER, x_lo, x_hi)
+    w_hi = _clamp(x + X_JITTER, x_lo, x_hi)
+    if w_lo <= w_hi:
+        x_lo, x_hi = w_lo, w_hi
 
-    # Safety net: only trips if a retry/fallback pushed a previous point high
-    if x_lo > x_hi:
-        print(f"[MANAGER] X range collapsed for area {area} "
-              f"(lo={x_lo}, hi={x_hi}) — clamping")
-        logger.warning(f"X range collapsed for area {area} (lo={x_lo}, hi={x_hi})")
-        x_lo = x_hi = min(max(x_lo, X_MIN), X_MAX)
+    return _pick_point(x_lo, x_hi, Y_MIN, Y_MAX, area, prev_points, avoid)
 
-    return {
-        "x": random.randint(int(x_lo), int(x_hi)),
-        "y": random.randint(Y_MIN, Y_MAX),
-        "area": area,
-    }
-
-def db_deactivate_manuals() -> list[str]:
-    """Clear all PLC_COMM rows where auto_manual='ACTIVE'. Returns list of affected UIDs."""
-    db = None
-    affected = []
-    try:
-        db  = _db_connect()
-        cur = db.cursor(pymysql.cursors.DictCursor)
-        cur.execute(
-            "SELECT UID FROM PLC_COMM WHERE AUTO_MANUAL = 'ACTIVE'"
-        )
-        rows = cur.fetchall()
-        affected = [r["UID"] for r in rows]
-        if affected:
-            cur.execute(
-                """
-                UPDATE PLC_COMM
-                   SET AUTO_MANUAL = NULL, UPDATED = %s
-                WHERE AUTO_MANUAL = 'ACTIVE'
-                """,
-                (datetime.now(),)
-            )
-            db.commit()
-    except Exception as e:
-        print(f"[DB] db_deactivate_manuals error: {e}")
-        logger.error(f"{traceback.format_exc()}")
-    finally:
-        if db: db.close()
-    return affected
-
-def get_nearby_position(pos, prev_points=None, max_shift=HARD_RETRY_MAX_SHIFT):
+def get_alternate_position(pos, prev_points=None, avoid=None,
+                           min_shift=ALT_MIN_SHIFT):
     """
-    Hard material was hit at `pos` — return a new point within ±max_shift %
-    on both axes, still respecting MIN_X_GAP against the other sample points.
+    The point at `pos` was blocked — AI obstruction or hard material.
+
+    Return a new point in the SAME area (three areas still have to be covered)
+    but in a DIFFERENT DIRECTION: Y flips to the opposite half of the bed and X
+    moves to the far side of the bad column inside the area's slot. Nudging a
+    few percent, as the old nearby-retry did, just drives the auger back into
+    the same rock or the same obstruction.
     """
     prev_points = prev_points or []
+    avoid = list(avoid or [])
+    if not any(a.get("x") == pos["x"] and a.get("y") == pos["y"] for a in avoid):
+        avoid.append({"x": pos["x"], "y": pos["y"], "area": pos.get("area")})
 
-    # Keep the retry inside this area's slot
-    x_lo = max(X_MIN, pos["x"] - max_shift)
-    x_hi = min(X_MAX - (TOTAL_CYCLES - pos["area"]) * MIN_X_GAP, pos["x"] + max_shift)
-    others = [p["x"] for p in prev_points if p["area"] != pos["area"]]
-    for ox in others:
-        if ox < pos["x"]:
-            x_lo = max(x_lo, ox + MIN_X_GAP)
-        else:
-            x_hi = min(x_hi, ox - MIN_X_GAP)
-    if x_lo > x_hi:
-        x_lo = x_hi = pos["x"]        # no room to shift X — move Y only
+    area = pos["area"]
+    x_lo, x_hi = _x_slot(area, prev_points)
 
-    y_lo = max(Y_MIN, pos["y"] - max_shift)
-    y_hi = min(Y_MAX, pos["y"] + max_shift)
+    # ── Y: jump to the opposite half of the bed ───────────────────────────────
+    y_mid = (Y_MIN + Y_MAX) / 2.0
+    if pos["y"] >= y_mid:
+        y_lo, y_hi = Y_MIN, max(Y_MIN, y_mid - 1)        # was high -> go low
+    else:
+        y_lo, y_hi = min(Y_MAX, y_mid + 1), Y_MAX        # was low  -> go high
 
-    for _ in range(10):
-        nx = random.randint(int(x_lo), int(x_hi))
-        ny = random.randint(int(y_lo), int(y_hi))
-        if (nx, ny) != (pos["x"], pos["y"]):
-            return {"x": nx, "y": ny, "area": pos["area"]}
+    # ── X: stay in the area's slot, but prefer the far side of the bad column ─
+    if (pos["x"] - x_lo) >= (x_hi - pos["x"]):
+        xa_lo, xa_hi = x_lo, pos["x"] - min_shift        # more room to the left
+    else:
+        xa_lo, xa_hi = pos["x"] + min_shift, x_hi        # more room to the right
+    if xa_lo > xa_hi:                 # slot too tight to move X — Y does the work
+        xa_lo, xa_hi = x_lo, x_hi
 
-    return {"x": int(x_lo), "y": int(y_hi), "area": pos["area"]}
+    new = _pick_point(xa_lo, xa_hi, y_lo, y_hi, area, prev_points, avoid,
+                      anchor=pos, min_shift=min_shift)
+
+    # Last resort: the window collapsed onto the bad point itself. Force the
+    # Y flip so the retry is at least on the other side of the bed.
+    if new is None or (new["x"] == pos["x"] and new["y"] == pos["y"]):
+        new = {"x": int(_clamp(pos["x"], x_lo, x_hi)),
+               "y": int(_clamp(Y_MAX if pos["y"] < y_mid else Y_MIN, Y_MIN, Y_MAX)),
+               "area": area}
+
+    return new
+
+# Old name kept so any external caller keeps working. The `max_shift` keyword
+# is gone — the point of a retry is now to get AWAY from the blocked spot,
+# not to stay within 10% of it.
+get_nearby_position = get_alternate_position
 
 
 # ── State machine ─────────────────────────────────────────────────────────────
@@ -503,6 +610,35 @@ def db_complete_log(uid: str) -> bool:
     finally:
         if db: db.close()
 
+def db_deactivate_manuals() -> list[str]:
+    """Clear all PLC_COMM rows where auto_manual='ACTIVE'. Returns list of affected UIDs."""
+    db = None
+    affected = []
+    try:
+        db  = _db_connect()
+        cur = db.cursor(pymysql.cursors.DictCursor)
+        cur.execute(
+            "SELECT UID FROM PLC_COMM WHERE AUTO_MANUAL = 'ACTIVE'"
+        )
+        rows = cur.fetchall()
+        affected = [r["UID"] for r in rows]
+        if affected:
+            cur.execute(
+                """
+                UPDATE PLC_COMM
+                   SET AUTO_MANUAL = NULL, UPDATED = %s
+                WHERE AUTO_MANUAL = 'ACTIVE'
+                """,
+                (datetime.now(),)
+            )
+            db.commit()
+    except Exception as e:
+        print(f"[DB] db_deactivate_manuals error: {e}")
+        logger.error(f"{traceback.format_exc()}")
+    finally:
+        if db: db.close()
+    return affected
+
 def db_add_plc_comm(uid: str, state: str) -> bool:
     db = None
     try:
@@ -594,7 +730,6 @@ def db_read_decision(uid: str) -> str:
     finally:
         if db: db.close()
     return ""
-
 
 def db_clear_decision(uid: str) -> bool:
     """
@@ -690,9 +825,11 @@ class Manager:
         # Force the next positioning move to go via HOME (used for cycle 1 and
         # after errors/timeouts so the auger recovers from a known reference)
         self._force_home_next = True
-        self._hard_retry_pos = None   # nearby point to use on the next CYCLE_POSITION pass (hard-material retry)
+        self._hard_retry_pos = None   # pre-computed point for the next CYCLE_POSITION pass (blocked-point retry)
         self._hard_retries   = 0      # consecutive hard-material hits for the CURRENT cycle number
         self._consecutive_hard = 0    # hard-material hits in a row; any SUCCESS clears it
+        self._avoid_points     = []   # every AI-blocked / hard-material spot this
+                                      # session, so later points steer clear of it
 
         # Auger position confirmation tracking
         self._confirmation_loop_count = 0
@@ -1058,9 +1195,9 @@ class Manager:
             logger.error(f"{traceback.format_exc()}")
             return False
 
-# ─────────────────────────────────────────────────────────────────────────────
-# A6. NEW METHODS — sample-info tracking. Add near the other helpers.
-# ─────────────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────────
+    # Sample-info tracking
+    # ─────────────────────────────────────────────────────────────────────────────
  
     def _new_sample_info(self) -> dict:
         return {
@@ -1071,50 +1208,205 @@ class Manager:
             "collection_mode": "AUTO",
             "bounds": {"x_min": X_MIN, "x_max": X_MAX, "y_min": Y_MIN, "y_max": Y_MAX},
             "attempts": [],
+            "current": None,          # point being sampled RIGHT NOW (live dashboard dot)
+            "started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "cycle_started": None,    # barrier opens — the operator's clock starts here
+            "cycle_ended": None,      # sampling stops, vehicle released
             "updated": None,
         }
- 
+
+    # Which cameras to freeze when an attempt fails. CAM1 is the ROI/coal view
+    # the AI judges on, CAM3 is the wide auger view — between them an operator
+    # can tell an AI misread from genuinely hard material.
+    ATTEMPT_SNAPSHOT_CAMS = ("CAM3", ) # "CAM1",
+
+    def _snapshot_attempt(self, seq: int, reason: str | None) -> str | None:
+        """
+        Freeze the current camera view for a FAILED attempt.
+
+        Copies the newest TEMP_IMG frames — the background camera threads
+        rewrite those roughly once a second, so they are as current as a fresh
+        capture would be, and copying costs no MQTT round trip (a single-capture
+        request here would reintroduce the CAM1 command-drop stall).
+
+        Returns the CAM1 path, which becomes the thumbnail behind that dot in
+        the History sample map. Returns None rather than raising — a missing
+        picture must never abort a sampling cycle.
+        """
+        try:
+            out_dir = os.path.join(
+                RESULT_IMG_PATH, self.date_file, str(self.uid), "ATTEMPTS"
+            )
+            os.makedirs(out_dir, exist_ok=True)
+
+            stamp = datetime.now().strftime("%H%M%S")
+            tag   = (reason or "FAILED").upper()
+            first = None
+
+            for cam in self.ATTEMPT_SNAPSHOT_CAMS:
+                src = os.path.join(TEMP_IMG_PATH, f"{cam}_REDUCED.jpg")
+                if not os.path.exists(src):
+                    logger.warning(f"Attempt snapshot: {cam} frame missing ({src})")
+                    continue
+
+                dest = os.path.join(
+                    out_dir, f"{self.uid}_a{seq}_{tag}_{cam}_{stamp}.jpg"
+                )
+                shutil.copy2(src, dest)
+                if first is None:
+                    first = normalize_path(dest)
+
+            if first:
+                logger.debug(f"Attempt #{seq} ({tag}) snapshot saved: {first}")
+            else:
+                logger.warning(f"Attempt #{seq} ({tag}): no camera frame available")
+            return first
+
+        except Exception:
+            logger.error(f"{traceback.format_exc()}")
+            return None
+
+    def _set_live_target(self, pos: dict | None):
+        """
+        Publish the point the auger is heading to, so the dashboard can blink
+        it yellow before the outcome is known. Cleared by _record_attempt().
+        """
+        try:
+            if self._sample_info is None:
+                self._sample_info = self._new_sample_info()
+            self._sample_info["current"] = dict(pos) if pos else None
+            self._sample_info["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if self.uid:
+                db_update_sample_info(self.uid, self._sample_info)
+        except Exception:
+            # Purely cosmetic bookkeeping — never let it break the cycle
+            logger.error(f"{traceback.format_exc()}")
+
+    def _mark_cycle_start(self):
+        """
+        Stamp the moment the barrier opens.
+
+        Idempotent on purpose: safe to call on every tick of the OPEN_BARRIER
+        state, and safe if the state is re-entered. First call wins, so a
+        barrier that reopens doesn't restart the operator's clock.
+        """
+        try:
+            if self._sample_info is None:
+                self._sample_info = self._new_sample_info()
+            if self._sample_info.get("cycle_started"):
+                return                                  # already running
+            self._sample_info["cycle_started"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._sample_info["updated"] = self._sample_info["cycle_started"]
+            if self.uid:
+                db_update_sample_info(self.uid, self._sample_info)
+            logger.debug(f"Cycle clock started: {self._sample_info['cycle_started']}")
+        except Exception:
+            logger.error(f"{traceback.format_exc()}")
+
+    def _mark_cycle_end(self):
+        """
+        Stamp the moment sampling stops. Idempotent — first call wins, so the
+        recorded duration is when work actually finished, not when the last
+        piece of cleanup happened to run.
+        """
+        try:
+            if self._sample_info is None:
+                self._sample_info = self._new_sample_info()
+            if self._sample_info.get("cycle_ended"):
+                return
+            self._sample_info["cycle_ended"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._sample_info["updated"] = self._sample_info["cycle_ended"]
+            self._sample_info["current"] = None          # nothing is being sampled now
+            if self.uid:
+                db_update_sample_info(self.uid, self._sample_info)
+            logger.debug(f"Cycle clock stopped: {self._sample_info['cycle_ended']}")
+        except Exception:
+            logger.error(f"{traceback.format_exc()}")
+
     def _record_attempt(self, pos: dict | None, status: str, reason: str | None = None):
         """
         Log one sampling attempt — successful or failed — and persist it.
- 
+
         Written immediately rather than at the end of the session so the data
         survives a crash, a reset, or an ERROR state mid-cycle.
+
+        A failure caused by AI obstruction or hard material also registers the
+        point on the avoid list, so every later draw — fresh point or retry —
+        steers clear of ground that has already proved bad. Doing it here means
+        both the AI path and the hard-material path get it without either
+        having to remember to.
         """
         try:
             if self._sample_info is None:
                 self._sample_info = self._new_sample_info()
             self._sample_info["uid"] = self.uid
- 
+
+            seq = len(self._sample_info["attempts"]) + 1
+
+            # Failures (AI block, hard material, cycle error/timeout) get a
+            # frozen camera view. Successes already have SAMPLE_n_IMG_PATH.
+            image = None
+            if status != "SUCCESS":
+                image = self._snapshot_attempt(seq, reason)
+
             self._sample_info["attempts"].append({
-                "seq":    len(self._sample_info["attempts"]) + 1,
+                "seq":    seq,
                 "cycle":  self.cycle,
                 "area":   (pos or {}).get("area"),
                 "x":      (pos or {}).get("x"),
                 "y":      (pos or {}).get("y"),
                 "status": status,                       # SUCCESS | FAILED
                 "reason": reason,
+                "image":  image,
                 "time":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
- 
+
             if status == "SUCCESS": self._sample_info["successful"] += 1
             else:                   self._sample_info["failed"] += 1
- 
+
+            # The outcome is known, so the live blinking dot is retired here.
+            self._sample_info["current"] = None
             self._sample_info["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
- 
+
             if self.uid:
                 db_update_sample_info(self.uid, self._sample_info)
- 
+
             print(f"[MANAGER] Sample attempt logged: {status} "
                   f"{reason or ''} at {pos}")
-            logger.debug(f"Sample attempt logged: {status} {reason or ''} at {pos}")
+            logger.debug(f"Sample attempt logged: {status} {reason or ''} at {pos}"
+                         f"{' img=' + image if image else ''}")
         except Exception:
             # Never let bookkeeping break the cycle
             logger.error(f"{traceback.format_exc()}")
+
+        # Remember blocked ground so later points give it a wide berth.
+        # Kept outside the try above so a bookkeeping failure can't silently
+        # lose the avoidance, and vice versa.
+        try:
+            if status == "FAILED" and reason in BLOCKING_REASONS and pos:
+                if not hasattr(self, "_avoid_points") or self._avoid_points is None:
+                    self._avoid_points = []
+                self._avoid_points.append({
+                    "x":      pos.get("x"),
+                    "y":      pos.get("y"),
+                    "area":   pos.get("area"),
+                    "reason": reason,
+                })
+                print(f"[MANAGER] Avoid list now has {len(self._avoid_points)} blocked point(s)")
+                logger.debug(f"Avoid list: {self._avoid_points}")
+        except Exception:
+            logger.error(f"{traceback.format_exc()}")
+
+    def _avoid(self) -> list:
+        """Blocked points for this session, safe even before __init__ ran."""
+        pts = getattr(self, "_avoid_points", None)
+        if pts is None:
+            pts = self._avoid_points = []
+        return pts
  
  
 # ─────────────────────────────────────────────────────────────────────────────
-# A7. AI CONFIRMATION — add next to _confirm_auger_position_with_movement_loop
+# AI CONFIRMATION
 # ─────────────────────────────────────────────────────────────────────────────
  
     def _confirm_position_before_start(self, target_area: int) -> bool:
@@ -1257,6 +1549,7 @@ class Manager:
 
     def _handle_open_barrier(self):
         msg = self._pop("plc_barrier/status")
+        self._mark_cycle_start()
 
         if msg and msg.get("action") == "green_sent":
             print("[MANAGER] Green Signal set !")
@@ -1441,35 +1734,39 @@ class Manager:
             self._goto(State.SAMPLE_COLLECTION)
             return
 
-        # NEW: hard-material retry — reuse the pre-computed NEARBY point
-        # (≤10% shift on X/Y from the failed point) instead of generating a
-        # brand-new area position.
+        # A blocked point (AI obstruction / hard material) has already had its
+        # replacement computed by get_alternate_position() — that point sits in
+        # the opposite half of the bed, clear of every spot known to be bad.
         is_hard_retry = self._hard_retry_pos is not None
         if is_hard_retry:
             self.positions.append(self._hard_retry_pos)
             self._hard_retry_pos = None
-            print(f"[MANAGER] HARD-MATERIAL RETRY — using nearby point {self.positions[-1]}")
-            logger.debug(f"Hard-material retry — using nearby point {self.positions[-1]}")
+            print(f"[MANAGER] BLOCKED-POINT RETRY — using {self.positions[-1]}")
+            logger.debug(f"Blocked-point retry — using {self.positions[-1]}")
         else:
-            # Get sample positions (original behaviour)
+            # Fresh point for the next area, kept clear of anything blocked
             areas = [p["area"] for p in self.positions]
-            target_area = get_sample_positions(used_areas=areas, prev_points=self.positions)
-            if target_area is not None: self.positions.append(target_area)
-            else:
-                target_area = get_sample_positions([], [])
+            avoid = self._avoid()
+            target_area = get_sample_positions(used_areas=areas,
+                                               prev_points=self.positions,
+                                               avoid=avoid)
+            if target_area is not None:
                 self.positions.append(target_area)
+            else:
+                self.positions.append(get_sample_positions([], [], avoid))
 
         pos = self.positions[self._current_sample_index]
 
         # NEW PROCESS: cycles 2 & 3 travel DIRECTLY from the previous position
         # (no homing in between). Cycle 1 — or any retry after an error /
         # timeout — goes via home so the auger starts from a known reference.
-        # NEW: a hard-material retry also goes DIRECT (even on cycle 1),
-        # because the Z cycle finished normally so the tracked position is
-        # still trusted — the auger just slides ≤10% over.
+        # A hard-material retry also goes DIRECT (even on cycle 1), because the
+        # Z cycle finished normally so the tracked position is still trusted.
+        # An AI-blocked retry sets _force_home_next, so it homes first.
         direct = ((self._successful_cycles > 0) or is_hard_retry) and (not self._force_home_next)
         self._force_home_next = False
 
+        self._set_live_target(self.positions[-1] if self.positions else None)
         self._sampler(action="sample_cycle", x=pos["x"], y=pos["y"], direct=direct)
         print(f"[MANAGER] Sampling positions: {self.positions}")
         print(f"[MANAGER] Moving to sampling position: {pos} (direct={direct})")
@@ -1481,9 +1778,13 @@ class Manager:
         The AI could not confirm the auger position. The UI shows a popup with
         two choices; the web app writes the answer into PLC_COMM.AI_DECISION.
 
-          CONTINUE -> pick a fresh position and carry on sampling
+          CONTINUE -> move to a different spot in this area and carry on
           MANUAL   -> operator collects the sample by hand; the session is
                       closed out and marked COMPLETED
+
+        On CONTINUE the replacement point is computed HERE rather than being
+        left to the fresh-point path, which would regenerate inside the same
+        area and could land a few percent from the spot the AI just rejected.
 
         Emergency still takes priority, and an unanswered popup falls through
         to CONTINUE after AI_DECISION_TIMEOUT so a truck is never stranded.
@@ -1521,21 +1822,25 @@ class Manager:
             self._goto(State.COMPLETE_FINAL)
             return
 
-        if decision == "CONTINUE":
-            print("[MANAGER] Operator chose CONTINUE — trying a new position")
-            logger.warning("Operator chose CONTINUE — trying a new position")
+        if decision == "CONTINUE" or self._elapsed() > AI_DECISION_TIMEOUT:
+            if decision == "CONTINUE":
+                print("[MANAGER] Operator chose CONTINUE — moving away from the blocked spot")
+                logger.warning("Operator chose CONTINUE — moving away from the blocked spot")
+            else:
+                print("[MANAGER] No operator decision — continuing away from the blocked spot")
+                logger.warning("No operator decision within timeout — continuing automatically")
+
+            if self._ai_blocked_pos:
+                self._hard_retry_pos = get_alternate_position(
+                    self._ai_blocked_pos,
+                    prev_points=self.positions,
+                    avoid=self._avoid(),
+                )
+                print(f"[MANAGER] New point clear of the obstruction: {self._hard_retry_pos}")
+                logger.debug(f"New point clear of the obstruction: {self._hard_retry_pos}")
 
             self._ai_blocked_pos = None
             self._force_home_next = True      # recover from a known reference
-            db_update_plc_comm(self.uid, State.CYCLE_POSITION.name)
-            self._goto(State.CYCLE_POSITION)
-            return
-
-        if self._elapsed() > AI_DECISION_TIMEOUT:
-            print("[MANAGER] No operator decision — continuing with a new position")
-            logger.warning("No operator decision within timeout — continuing automatically")
-            self._ai_blocked_pos = None
-            self._force_home_next = True
             db_update_plc_comm(self.uid, State.CYCLE_POSITION.name)
             self._goto(State.CYCLE_POSITION)
             return
@@ -1585,7 +1890,7 @@ class Manager:
             cycle_num = self._successful_cycles + 1
             self.cycle = cycle_num
             self._sampler(action="start_cycle", cycle=cycle_num)
-            self._start_sample_capture(cycle_num)      # NEW
+            self._start_sample_capture(cycle_num)
             print("[MANAGER] CYCLE START GIVEN !!!")
             logger.debug("Position set, cycle start given")
             time.sleep(1)
@@ -1657,7 +1962,8 @@ class Manager:
 
         if decision == "CONTINUE":
             # The popup does not offer this, but an operator with dashboard
-            # access could still send it deliberately.
+            # access could still send it deliberately. The avoid list is kept
+            # intact so the fresh point still steers clear of the hard spots.
             print("[MANAGER] Operator chose CONTINUE after hard material — new position")
             logger.warning("Operator chose CONTINUE after hard material — new position")
             self._consecutive_hard = 0
@@ -1712,7 +2018,6 @@ class Manager:
  
             self._successful_cycles += 1
             self._current_sample_index += 1
-            self._hard_retries = 0
             self._hard_retries     = 0
             self._consecutive_hard = 0     # a good sample breaks the streak
  
@@ -1749,10 +2054,16 @@ class Manager:
                 self._goto(State.HARD_BLOCKED_WAIT)
                 return
  
-            # ── First hit: retry at a nearby point as before ─────────────────
-            self._hard_retry_pos = get_nearby_position(bad, prev_points=self.positions)
-            print(f"[MANAGER] Retrying at nearby point {self._hard_retry_pos}")
-            logger.debug(f"Retrying at nearby point {self._hard_retry_pos}")
+            # ── First hit: retry in a DIFFERENT direction, not next door ─────
+            # `bad` is already on the avoid list (_record_attempt put it there),
+            # so the new point clears it and every earlier hard/AI spot.
+            self._hard_retry_pos = get_alternate_position(
+                bad,
+                prev_points=self.positions,
+                avoid=self._avoid(),
+            )
+            print(f"[MANAGER] Retrying away from the hard spot at {self._hard_retry_pos}")
+            logger.debug(f"Retrying away from the hard spot at {self._hard_retry_pos}")
  
             self._goto(State.CYCLE_POSITION)
             return
@@ -1879,6 +2190,7 @@ class Manager:
             self._successful_cycles = 0
             self._current_sample_index = 0
             self.positions = []
+            self._hard_retry_pos = None
             self._force_home_next = True   # After emergency, always re-home first
             self._emergency_return_state = None
             self._goto(State.VEHICLE_PLACEMENT)
@@ -1948,6 +2260,7 @@ class Manager:
         
         # Signal RFID reader to resume reading
         self.mqtt.publish("rfid/control", {"action": "cycle_reset"})
+        self._mark_cycle_end()
         
         self.uid       = None
         self.rfids     = []
@@ -1965,7 +2278,10 @@ class Manager:
         self._sample_info    = self._new_sample_info()
         self._ai_blocked_pos = None
         self._ai_block_count = 0
+        self._hard_retry_pos   = None
+        self._hard_retries     = 0
         self._consecutive_hard = 0     # a good sample breaks the streak
+        self._avoid_points     = []    # blocked ground is per-vehicle, not global
         self._stop_sample_capture()
         self._capture_stop   = None
         self._capture_thread = None

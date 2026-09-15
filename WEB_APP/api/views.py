@@ -335,9 +335,22 @@ def fetch_history_data(request):
 
     results = []
     for idx, row in enumerate(queryset, start=1):
+        # ── Cycle timing ─────────────────────────────────────────────────────
+        info = _parse_sample_info(row.sample_info)
+        cycle_start, cycle_end = _cycle_window(row, info)
+
+        cycle_time = ""
+        if cycle_start and cycle_end and cycle_end >= cycle_start:
+            secs = int((cycle_end - cycle_start).total_seconds())
+            cycle_time = f"{secs // 60:02d}:{secs % 60:02d}"
+
         results.append({
             "sno": idx,
-            "datetimestamp": row.create_time.strftime("%Y-%m-%d %H:%M:%S") if row.create_time else None,
+            # kept: sendPrintData() and the CSV export both read datetimestamp
+            "datetimestamp": cycle_start.strftime("%Y-%m-%d %H:%M:%S") if cycle_start else None,
+            "cycle_start":   cycle_start.strftime("%Y-%m-%d %H:%M:%S") if cycle_start else None,
+            "cycle_end":     cycle_end.strftime("%Y-%m-%d %H:%M:%S") if cycle_end else None,
+            "cycle_time":    cycle_time,
             "vehicle_number": row.vehicle_number,
             "vendor_name": row.vendor_name,
             "vendor_code": row.vendor_code,
@@ -347,7 +360,7 @@ def fetch_history_data(request):
             "sample_3_image": f"/api/serve-file?file={row.sample_3_img_path}" if row.sample_3_img_path else None,
             "report_path": row.report_path if row.report_path else None,
             "bucket_no": row.bucket_no,
-            "sample_info": _parse_sample_info(row.sample_info),
+            "sample_info": info,
         })
 
     return JsonResponse({
@@ -408,7 +421,9 @@ def download_history_data(request):
         # Header (same as UI)
         writer.writerow([
             "SNo",
-            "Datetime",
+            "Cycle Start",
+            "Cycle End",
+            "Cycle Time (MM:SS)",
             "Vehicle Number",
             "Vendor Name",
             "Vendor Code",
@@ -416,9 +431,18 @@ def download_history_data(request):
         ])
 
         for idx, row in enumerate(queryset, start=1):
+            cycle_start = row.create_time
+            cycle_end   = getattr(row, "update_time", None)
+            cycle_time  = ""
+            if cycle_start and cycle_end and cycle_end >= cycle_start:
+                secs = int((cycle_end - cycle_start).total_seconds())
+                cycle_time = f"{secs // 60:02d}:{secs % 60:02d}"
+
             writer.writerow([
                 idx,
-                row.create_time.strftime("%Y-%m-%d %H:%M:%S") if row.create_time else "",
+                cycle_start.strftime("%Y-%m-%d %H:%M:%S") if cycle_start else "",
+                cycle_end.strftime("%Y-%m-%d %H:%M:%S") if cycle_end else "",
+                cycle_time,
                 row.vehicle_number,
                 row.vendor_name,
                 row.vendor_code,
@@ -586,6 +610,98 @@ def health_status(request):
         "data": results,
     })
 
+def _naive_local(dt):
+    """Aware or naive in, naive local out. Nothing downstream compares tz-aware
+    to tz-naive, which is the classic way this arithmetic dies silently."""
+    if dt is None:
+        return None
+    try:
+        if timezone.is_aware(dt):
+            return timezone.localtime(dt).replace(tzinfo=None)
+    except Exception:
+        pass
+    return dt
+
+
+def _parse_stamp(value):
+    """Accept a datetime or a 'YYYY-MM-DD HH:MM:SS' string; return naive local."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return _naive_local(value)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(str(value), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _cycle_window(vehicle_log, info=None):
+    """
+    (start, end) for one session, both naive local, either may be None.
+
+    Preferred anchors are the manager's explicit marks: barrier open to cycle
+    stop, which is the span the operator actually experiences. CREATE_TIME /
+    UPDATE_TIME are the fallback for sessions recorded before the manager was
+    stamping these, so old history rows keep showing a sensible duration.
+    """
+    start = end = None
+
+    if isinstance(info, dict):
+        start = _parse_stamp(info.get("cycle_started"))
+        end   = _parse_stamp(info.get("cycle_ended"))
+
+    if start is None:
+        start = _parse_stamp(getattr(vehicle_log, "create_time", None))
+    if end is None:
+        end = _parse_stamp(getattr(vehicle_log, "update_time", None))
+
+    return start, end
+
+def _live_status_extras(vehicle_log):
+    """
+    Extra, additive fields for the dashboard status panel and the live truck map.
+
+    The timing block no longer hides its failures. The previous version wrapped
+    everything in a bare except and returned 0, so a broken clock was
+    indistinguishable from a cycle that had just started.
+    """
+    extras = {
+        "sample_info": None,
+        "cycle_start": None,
+        "cycle_end": None,
+        "elapsed_seconds": 0,
+        "elapsed_running": False,
+    }
+    if not vehicle_log:
+        return extras
+
+    info = None
+    try:
+        info = _parse_sample_info(vehicle_log.sample_info)
+    except Exception as e:
+        print(f"[WARN] _live_status_extras: sample_info unreadable: {e}")
+    extras["sample_info"] = info
+
+    try:
+        start, end = _cycle_window(vehicle_log, info)
+
+        if start:
+            extras["cycle_start"] = start.strftime("%Y-%m-%d %H:%M:%S")
+            stop = end or datetime.now()
+            extras["elapsed_seconds"] = max(0, int((stop - start).total_seconds()))
+            extras["elapsed_running"] = end is None
+
+        if end:
+            extras["cycle_end"] = end.strftime("%Y-%m-%d %H:%M:%S")
+
+    except Exception as e:
+        # Loud, not silent — a stuck 00:00 should be diagnosable from the log
+        print(f"[WARN] _live_status_extras: elapsed calc failed: {e}")
+
+    return extras
+
 @csrf_exempt
 def get_current_status(request):
     try:
@@ -613,6 +729,9 @@ def get_current_status(request):
                 "auto_manual": None,
                 "retake_available": retake_available,
                 "last_error_uid": last_error_uid,
+                # "emergency": emergency,
+                # "auto_manual": auto_manual,
+                **_live_status_extras(current_vehicle),
             })
 
         vehicle_obj = None
@@ -648,8 +767,11 @@ def get_current_status(request):
                 "vendor_code": None,
                 "emergency": None,
                 "auto_manual": None,
-                "retake_available": False,
-                "last_error_uid": None,
+                "retake_available": retake_available,
+                "last_error_uid": last_error_uid,
+                # "emergency": emergency,
+                # "auto_manual": auto_manual,
+                **_live_status_extras(current_vehicle),
             })
 
         # 5. Get PLC state
@@ -672,8 +794,11 @@ def get_current_status(request):
                     "current_state": current_state,
                     "vehicle_number": vehicle_obj.vehicle_number,
                     "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
-                    "retake_available": False,
-                    "last_error_uid": None,
+                    "retake_available": retake_available,
+                    "last_error_uid": last_error_uid,
+                    "emergency": emergency,
+                    "auto_manual": auto_manual,
+                    **_live_status_extras(current_vehicle),
                 })
  
             if current_state == "AI_BLOCKED_WAIT":
@@ -684,8 +809,11 @@ def get_current_status(request):
                     "current_state": current_state,
                     "vehicle_number": vehicle_obj.vehicle_number,
                     "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
-                    "retake_available": False,
-                    "last_error_uid": None,
+                    "retake_available": retake_available,
+                    "last_error_uid": last_error_uid,
+                    "emergency": emergency,
+                    "auto_manual": auto_manual,
+                    **_live_status_extras(current_vehicle),
                 })
             
             if emergency == "ACTIVE":
@@ -696,8 +824,11 @@ def get_current_status(request):
                     "current_state": current_state,
                     "vehicle_number": vehicle_obj.vehicle_number,
                     "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
-                    "retake_available": False,
-                    "last_error_uid": None,
+                    "retake_available": retake_available,
+                    "last_error_uid": last_error_uid,
+                    "emergency": emergency,
+                    "auto_manual": auto_manual,
+                    **_live_status_extras(current_vehicle),
                 })
 
             if auto_manual == "ACTIVE":
@@ -708,8 +839,11 @@ def get_current_status(request):
                     "current_state": current_state,
                     "vehicle_number": vehicle_obj.vehicle_number,
                     "vendor_name": vendor_obj.vendor_name if vendor_obj else None,
-                    "retake_available": False,
-                    "last_error_uid": None,
+                    "retake_available": retake_available,
+                    "last_error_uid": last_error_uid,
+                    "emergency": emergency,
+                    "auto_manual": auto_manual,
+                    **_live_status_extras(current_vehicle),
                 })
 
         # 6. Normal flow
@@ -725,8 +859,9 @@ def get_current_status(request):
             "datetimestamp": current_vehicle.create_time.strftime("%d/%m/%Y %H:%M") if current_vehicle.create_time else "",
             "emergency": emergency,
             "auto_manual": auto_manual,
-            "retake_available": False,
-            "last_error_uid": None,
+            "retake_available": retake_available,
+            "last_error_uid": last_error_uid,
+            **_live_status_extras(current_vehicle),
         })
 
     except Exception as e:
@@ -888,36 +1023,60 @@ def print_current_vehicle(request):
 def reset_system(request):
     if request.method != "POST":
         return JsonResponse({"success": False, "error": "Invalid request method"}, status=405)
-    
+
     try:
         data = json.loads(request.body)
         uid = data.get("uid")
-        
-        # Mark current vehicle log as ERROR
-        current_vehicle = VEHICLE_LOGS.objects.filter(uid=uid, status="IN_PROGRESS").first()
+
+        # Mark the current vehicle log as ERROR.
+        #
+        # Fall back to "whatever is IN_PROGRESS" when the uid the browser sent
+        # doesn't match: a stale uid used to mean nothing got marked, the call
+        # still returned success, and the operator was left with a dead Retake
+        # button and no ERROR row to retake.
+        current_vehicle = None
+        if uid:
+            current_vehicle = VEHICLE_LOGS.objects.filter(
+                uid=uid, status="IN_PROGRESS"
+            ).first()
+
+        if not current_vehicle:
+            current_vehicle = VEHICLE_LOGS.objects.filter(
+                status="IN_PROGRESS"
+            ).order_by("-create_time").first()
+
+        marked_uid = None
         if current_vehicle:
-            current_vehicle.status = "ERROR"
+            current_vehicle.status        = "ERROR"
             current_vehicle.error_message = "System reset by user"
-            current_vehicle.update_time = timezone.now()
+            current_vehicle.update_time   = timezone.now()
             current_vehicle.save()
-        
-        # Reset PLC_COMM
-        plc_comm = PLC_COMM.objects.filter(uid=uid).first()
+            marked_uid = current_vehicle.uid
+
+        # Reset PLC_COMM for whichever session we actually marked
+        plc_uid = marked_uid or uid
+        plc_comm = PLC_COMM.objects.filter(uid=plc_uid).first() if plc_uid else None
         if plc_comm:
-            plc_comm.state = "IDLE"
-            plc_comm.emergency = None
-            plc_comm.auto_manual = None
-            plc_comm.emergency_acknowledged = False
+            plc_comm.state                    = "IDLE"
+            plc_comm.emergency                = None
+            plc_comm.auto_manual              = None
+            plc_comm.emergency_acknowledged   = False
             plc_comm.auto_manual_acknowledged = False
             plc_comm.user_approved_skip_cycles = False
-            plc_comm.updated = timezone.now()
+            plc_comm.updated                  = timezone.now()
             plc_comm.save()
-        
+
         return JsonResponse({
-            "success": True,
-            "message": "System reset successfully"
+            "success":     True,
+            "marked_uid":  marked_uid,
+            "marked":      bool(marked_uid),
+            "message": (
+                f"Session {marked_uid} marked as ERROR. Ready to retake."
+                if marked_uid else
+                "No session was in progress — nothing to mark."
+            ),
         })
-    
+
     except Exception as e:
         print(f"Error in reset_system: {e}")
         return JsonResponse({"success": False, "error": str(e)}, status=500)
@@ -966,4 +1125,95 @@ def ai_position_decision(request):
  
     except Exception as e:
         print(f"[ERROR] ai_position_decision: {e}")
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
+
+@csrf_exempt
+def dashboard_stats(request):
+    """
+    Daily counters for the dashboard stat tiles.
+
+    Polled once every 30 s rather than on the 2 s status loop: these are
+    aggregate table scans and get_current_status is already the busiest query
+    on the box. Every figure is computed in Python from one small per-day
+    fetch, which keeps it free of MySQL only_full_group_by problems.
+    """
+    from datetime import timedelta
+
+    try:
+        today     = datetime.now().date()
+        yesterday = today - timedelta(days=1)
+
+        def day_stats(day):
+            rows = list(
+                VEHICLE_LOGS.objects
+                .filter(create_time__date=day)
+                .values("status", "create_time", "update_time", "sample_info")
+            )
+
+            completed = [r for r in rows if r["status"] == "COMPLETED"]
+            failed    = [r for r in rows if r["status"] == "ERROR"]
+            running   = [r for r in rows if r["status"] == "IN_PROGRESS"]
+
+            # Cycle duration = log opened (RFID read) -> log closed (completed)
+            durations = []
+            for r in completed:
+                info = None
+                try:
+                    info = _parse_sample_info(r.get("sample_info"))
+                except Exception:
+                    pass
+
+                s = e = None
+                if isinstance(info, dict):
+                    s = _parse_stamp(info.get("cycle_started"))
+                    e = _parse_stamp(info.get("cycle_ended"))
+                if s is None:
+                    s = _parse_stamp(r["create_time"])
+                if e is None:
+                    e = _parse_stamp(r["update_time"])
+
+                if s and e and e >= s:
+                    durations.append(int((e - s).total_seconds()))
+
+            last_fail = None
+            if failed:
+                stamps = [r["create_time"] for r in failed if r["create_time"]]
+                if stamps:
+                    last_fail = max(stamps).strftime("%H:%M")
+
+            return {
+                "arrived":     len(rows),
+                "completed":   len(completed),
+                "failed":      len(failed),
+                "running":     len(running),
+                "avg_seconds": int(sum(durations) / len(durations)) if durations else 0,
+                "min_seconds": min(durations) if durations else 0,
+                "max_seconds": max(durations) if durations else 0,
+                "timed":       len(durations),
+                "last_fail":   last_fail,
+            }
+
+        # Trailing 7 full days (excludes today, so the average isn't dragged
+        # down by a day that is only half over)
+        week_qs = VEHICLE_LOGS.objects.filter(
+            create_time__date__gte=today - timedelta(days=7),
+            create_time__date__lt=today,
+        )
+        week_arrived   = week_qs.count()
+        week_completed = week_qs.filter(status="COMPLETED").count()
+
+        return JsonResponse({
+            "success":   True,
+            "today":     day_stats(today),
+            "yesterday": day_stats(yesterday),
+            "week": {
+                "arrived":       week_arrived,
+                "completed":     week_completed,
+                "avg_arrived":   round(week_arrived / 7.0, 1),
+                "avg_completed": round(week_completed / 7.0, 1),
+            },
+        })
+
+    except Exception as e:
+        print(f"[ERROR] dashboard_stats: {e}")
         return JsonResponse({"success": False, "error": str(e)}, status=500)

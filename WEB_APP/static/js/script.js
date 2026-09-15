@@ -183,7 +183,47 @@ function updateCurrentStatus() {
     fetch('/api/get_current_status/')
         .then(response => response.json())
         .then(data => {
-            // Update state display
+            renderStatusPanel(data);
+            renderLiveTruck(data);
+
+            // ── Session identity and buttons FIRST ──────────────────────────
+            // These have to run on every poll, including blocked ones. They
+            // used to sit below the blocking guard, so entering any wait state
+            // froze currentUID and lastErrorUID — and Reset System refuses to
+            // fire without a currentUID, which is precisely when an operator
+            // needs it most.
+            currentUID   = data.uid || null;
+            lastErrorUID = data.last_error_uid || null;
+
+            // const retakeBtn = document.getElementById('retakeBtn');
+            // if (retakeBtn) {
+            //     retakeBtn.disabled = !data.retake_available;
+            // }
+
+            // const printCurrentBtn = document.getElementById('printCurrentBtn');
+            // if (printCurrentBtn) {
+            //     const isInProgress = data.status === 'in_progress'
+            //         && !!data.vehicle_number
+            //         && data.vehicle_number !== 'NOT_FOUND';
+            //     printCurrentBtn.disabled = !isInProgress;
+            //     window._currentVehicleData = isInProgress ? {
+            //         vehicle_number: data.vehicle_number,
+            //         vendor_name:    data.vendor_name,
+            //         uid:            currentUID,
+            //         datetimestamp:  currentUID,
+            //     } : null;
+            // }
+
+            // ── Blocking states ─────────────────────────────────────────────
+            // let blocked = false;
+            // try {
+            //     blocked = handleBlockingState(data);
+            // } catch (e) {
+            //     console.error('handleBlockingState failed:', e);
+            // }
+            // if (blocked) {
+            //     return; // stop everything else
+            // }
 
             if (handleBlockingState(data)) {
                 return; // stop everything else
@@ -235,6 +275,16 @@ function updateCurrentStatus() {
                 retakeBtn.disabled = !data.retake_available;
             }
             lastErrorUID = data.last_error_uid || null;
+
+            let blocked = false;
+            try {
+                blocked = handleBlockingState(data);
+            } catch (e) {
+                console.error('handleBlockingState failed:', e);
+            }
+            if (blocked) {
+                return; // stop everything else
+            }
             
         })
         .catch(err => console.error("Status update failed:", err));
@@ -246,11 +296,9 @@ function resetSystemConfirm() {
 }
 
 function confirmResetSystem() {
-    if (!currentUID) {
-        alert('No active vehicle. Cannot reset.');
-        return;
-    }
-    
+    // No uid guard here any more. The server finds whatever is IN_PROGRESS if
+    // the browser's uid is stale, and the old client-side guard just meant the
+    // button silently refused to work in exactly the states it exists for.
     fetch('/api/reset_system/', {
         method: 'POST',
         headers: {
@@ -262,9 +310,19 @@ function confirmResetSystem() {
     .then(r => r.json())
     .then(res => {
         if (res.success) {
-            bootstrap.Modal.getInstance(document.getElementById('resetConfirmModal')).hide();
-            alert('System has been reset. All processes marked as ERROR. Ready for next vehicle.');
-            // Refresh status
+            const modal = bootstrap.Modal.getInstance(document.getElementById('resetConfirmModal'));
+            if (modal) modal.hide();
+
+            if (res.marked) {
+                alert('System reset. Session ' + res.marked_uid +
+                      ' marked as ERROR.\nUse "Retake Failed Cycle" to re-run it.');
+            } else {
+                alert('System reset, but no session was in progress — there is ' +
+                      'nothing to retake.');
+            }
+
+            // Pull the new retake_available straight away rather than waiting
+            // for the next 2 s poll
             updateCurrentStatus();
         } else {
             alert('Error: ' + (res.error || 'Unknown error'));
@@ -597,42 +655,36 @@ function populateTable(data, table_name) {
     if (table_name === 'History_body'){
         data.forEach(row => {
             const tr = document.createElement('tr');
+
             const VehicleImgButton = row.vehicle_image
                 ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.vehicle_image}">Vehicle View</button>`
                 : "";
-            const Img1Button = row.sample_1_image
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_1_image}">Sample View</button>`
-                : "";
-            const Img2Button = row.sample_2_image
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_2_image}">Sample View</button>`
-                : "";
-            const Img3Button = row.sample_3_image
-                ? `<button class="btn btn-sm btn-primary view-image-btn" data-timestamp="${row.create_time}" data-vehicle_number="${row.vehicle_number}" data-src="${row.sample_3_image}">Sample View</button>`
-                : "";
+
             const ReportButton = row.report_path
                 ? `<button class="btn btn-sm btn-primary" onclick="window.open('/api/serve-file/?file=${encodeURIComponent(row.report_path)}', '_blank')">Report</button>`
                 : "";
+
             const PrintButton = `<button class="btn btn-sm btn-warning" onclick="sendPrintData(${JSON.stringify(row).replace(/"/g, '&quot;')})">
                 <i class="fas fa-print"></i> Print
             </button>`;
+
             const SampleMapButton = row.sample_info
                 ? `<button class="btn btn-sm btn-dark"
                            onclick='openSampleMap(${JSON.stringify(row).replace(/'/g, "&#39;")})'>
                        <i class="fas fa-map-marker-alt"></i> Samples
                    </button>`
-                : `<span class="text-muted small">—</span>`;
+                : `<span class="text-muted small">&mdash;</span>`;
 
             tr.innerHTML = `
                 <td>${row.sno}</td>
-                <td>${row.datetimestamp}</td>
+                <td class="small">${row.cycle_start || '-'}</td>
+                <td class="small">${row.cycle_end || '-'}</td>
+                <td class="fw-semibold">${row.cycle_time || '-'}</td>
                 <td>${row.vehicle_number}</td>
                 <td>${row.vendor_name}</td>
                 <td>${row.vendor_code}</td>
                 <td>${row.bucket_no}</td>
                 <td>${VehicleImgButton}</td>
-                <td>${Img1Button}</td>
-                <td>${Img2Button}</td>
-                <td>${Img3Button}</td>
                 <td>${SampleMapButton}</td>
                 <td>${ReportButton}</td>
                 <td>${PrintButton}</td>
@@ -724,6 +776,9 @@ function renderPagination(pagination, tab) {
             }
             if (tab === 'vehicle_master') {
                 if (!isNaN(page)) fetchVehicleMaster(page);
+            }
+            if (tab === 'samplemap') {
+                if (!isNaN(page)) sampleMapGoto(page);
             }
         });
     });
@@ -1015,6 +1070,82 @@ document.addEventListener('DOMContentLoaded', function() {
 
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// HARD MATERIAL — operator acknowledgement
+// ════════════════════════════════════════════════════════════════════════════
+
+function showHardMaterialModal(data) {
+    hardBlockedUID = data.uid;
+
+    const label = document.getElementById('hardBlockedVehicle');
+    if (label) {
+        label.textContent = `${data.vehicle_number || '-'} — ${data.vendor_name || '-'}`;
+    }
+
+    if (hardModalOpen) return;            // already showing; don't re-open every poll
+
+    if (!hardModalInstance) {
+        hardModalInstance = new bootstrap.Modal(
+            document.getElementById('hardMaterialModal'),
+            { backdrop: 'static', keyboard: false }
+        );
+    }
+
+    const btn = document.getElementById('hardManualBtn');
+    if (btn) {
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="fas fa-hand-paper"></i> Collected Manually — Mark Completed';
+    }
+
+    hardModalOpen = true;
+    hardModalInstance.show();
+}
+
+function handleHardMaterialDecision() {
+    if (!hardBlockedUID) {
+        alert('No active session to answer.');
+        return;
+    }
+
+    // Lock immediately — a double click publishes the choice twice and the
+    // second message gets consumed by the NEXT block, same failure mode as
+    // the AI popup.
+    const btn = document.getElementById('hardManualBtn');
+    if (btn) {
+        btn.disabled  = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Sending...';
+    }
+
+    // Same DB channel as the AI decision: the manager reads PLC_COMM.AI_DECISION
+    // in HARD_BLOCKED_WAIT and treats MANUAL as "operator collected it by hand,
+    // release the vehicle and mark COMPLETED".
+    fetch('/api/ai_position_decision/', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: hardBlockedUID, decision: 'manual' })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            hardModalOpen = false;
+            if (hardModalInstance) hardModalInstance.hide();
+        } else {
+            if (btn) {
+                btn.disabled  = false;
+                btn.innerHTML = '<i class="fas fa-hand-paper"></i> Collected Manually — Mark Completed';
+            }
+            alert('❌ Could not send decision: ' + (res.error || 'Unknown error'));
+        }
+    })
+    .catch(err => {
+        if (btn) {
+            btn.disabled  = false;
+            btn.innerHTML = '<i class="fas fa-hand-paper"></i> Collected Manually — Mark Completed';
+        }
+        console.error(err);
+        alert('❌ Network error while sending the decision');
+    });
+}
  
 function showAiBlockedModal(data) {
     aiBlockedUID = data.uid;
@@ -1084,241 +1215,663 @@ function handleAiDecision(decision) {
     });
 }
 
-
 // ════════════════════════════════════════════════════════════════════════════
 // SAMPLE MAP — plot sample positions on the truck body
 // ════════════════════════════════════════════════════════════════════════════
 
 let sampleMapModalInstance = null;
-let sampleMapState = { attempts: [], bounds: {}, page: 0, perPage: 6, info: null };
- 
+let sampleMapState = {
+    attempts: [], bounds: {}, page: 1, perPage: 6, info: null, row: null
+};
+
+// The grey nose of the trailer takes the first 20% of the body, so dots start
+// clear of it. The remaining pads keep a 22px dot fully inside the border.
+/**
+ * Dot placement.
+ *
+ * X and Y are percentages of FULL auger travel, and the diagram represents the
+ * full truck, so a point at X=43 belongs at 43% along the body — full stop.
+ *
+ * The previous version stretched the reachable band (X 35..100) across the
+ * drawn area, which put the dots on a different scale from the grey shallow
+ * strip (drawn at 0..20% of the body). One picture, two coordinate systems:
+ * a point at X=43 landed at 33%, and the gaps between areas 1/2/3 came out
+ * wider than they really are. Everything is on the absolute scale now, so the
+ * 20% shallow band and the dots finally agree — and because the auger never
+ * travels below X=35, dots still naturally clear the grey strip.
+ *
+ * The pad keeps a 22px dot from hanging over the border at the extremes.
+ */
+const TRUCK_INSET = { x1: 24, x2: 95, y1: 14, y2: 86 };
+const TRUCK_PAD = { x1: 2, x2: 98, y1: 8, y2: 92 };
+
+function truckClamp(v) {
+    const n = Number(v);
+    if (v === null || v === undefined || isNaN(n)) return 50;
+    return Math.max(0, Math.min(100, n));
+}
+
+function truckLeftPct(x) {
+    return TRUCK_PAD.x1 + truckClamp(x) * (TRUCK_PAD.x2 - TRUCK_PAD.x1) / 100;
+}
+
+function truckTopPct(y) {
+    return TRUCK_PAD.y1 + truckClamp(y) * (TRUCK_PAD.y2 - TRUCK_PAD.y1) / 100;
+}
+
+// Kept for the bounds shown in tooltips / future use — no longer positions dots.
+function truckBounds(info) {
+    const b = (info && info.bounds) || {};
+    return {
+        xMin: b.x_min !== undefined ? b.x_min : 35,
+        xMax: b.x_max !== undefined ? b.x_max : 100,
+        yMin: b.y_min !== undefined ? b.y_min : 40,
+        yMax: b.y_max !== undefined ? b.y_max : 80
+    };
+}
+
+/**
+ * Map an auger travel percentage onto the diagram.
+ *
+ * The auger only travels X_MIN..X_MAX (35..100) and Y_MIN..Y_MAX (40..80), so
+ * the reachable band is stretched across the drawn area instead of being
+ * plotted as a raw percentage — that is why dots used to bunch into the middle
+ * third of the body and read as misaligned.
+ */
+function truckPct(v, lo, hi) {
+    if (v === null || v === undefined || hi === lo) return 50;
+    return Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+}
+
+function truckMap(v, lo, hi, a, b) {
+    return a + truckPct(v, lo, hi) * (b - a) / 100;
+}
+
+function truckBounds(info) {
+    const b = (info && info.bounds) || {};
+    return {
+        xMin: b.x_min !== undefined ? b.x_min : 35,
+        xMax: b.x_max !== undefined ? b.x_max : 100,
+        yMin: b.y_min !== undefined ? b.y_min : 40,
+        yMax: b.y_max !== undefined ? b.y_max : 80
+    };
+}
+
+function sampleDotClass(a) {
+    if (a.status === 'SUCCESS')        return 'sample-dot-ok';
+    if (a.reason === 'HARD_MATERIAL')  return 'sample-dot-hard';
+    return 'sample-dot-fail';
+}
+
+/**
+ * Which picture belongs to a dot.
+ *
+ * Failures carry their own frozen frame (saved by the manager). Successes fall
+ * back to SAMPLE_n_IMG_PATH, counted by success order rather than cycle number
+ * so a retried cycle still lines up with the right file.
+ */
+function sampleAttemptImageUrl(a, row) {
+    if (a.image) {
+        return '/api/serve-file?file=' + encodeURIComponent(a.image);
+    }
+    if (a.status === 'SUCCESS' && row) {
+        const n = sampleMapState.attempts
+            .filter(x => x.status === 'SUCCESS' && x.seq <= a.seq).length;
+        return row['sample_' + n + '_image'] || null;
+    }
+    return null;
+}
+
+function openSampleAttemptImage(seq) {
+    const a = sampleMapState.attempts.find(x => x.seq === seq);
+    if (!a) return;
+
+    const src = sampleAttemptImageUrl(a, sampleMapState.row);
+    if (!src) {
+        alert('No image was saved for attempt #' + seq + '.');
+        return;
+    }
+
+    const label = document.getElementById('vehicle_number');
+    if (label) {
+        label.innerHTML =
+            `Vehicle Number: <b>${(sampleMapState.row || {}).vehicle_number || '-'}</b>` +
+            ` &mdash; attempt #${a.seq} (${a.status}${a.reason ? ' · ' + a.reason.replaceAll('_', ' ') : ''})`;
+    }
+
+    const modalEl = document.getElementById('imageModal');
+    modalEl.dataset.src = src;
+    new bootstrap.Modal(modalEl).show();
+}
+
 /**
  * How many attempts fit on one page without the modal scrolling.
- *
- * Everything except the table has a known height, so the leftover space
- * divided by the row height is the answer. Clamped to 3..8 so a very short
- * window still shows something useful and a very tall one doesn't turn the
- * page into a wall of rows.
+ * Clamped to 3..8 so a short window still shows something useful and a tall one
+ * doesn't turn the page into a wall of rows.
  */
 function sampleMapPerPage() {
     const vh      = window.innerHeight;
-    const diagram = Math.min(0.30 * vh, 240);          // matches the CSS below
-    const chrome  = 64 + 72 + 38 + 38 + 40 + 34 + 34;  // header, footer, legend,
-                                                       // pager, badges, thead, padding
+    const diagram = Math.min(0.28 * vh, 220);
+    const chrome  = 56 + 64 + 34 + 36 + 40 + 34 + 30;  // header, footer, legend,
+                                                       // badges, pager, thead, padding
     const rowH    = 34;
     return Math.max(3, Math.min(8, Math.floor((vh * 0.94 - chrome - diagram) / rowH)));
 }
- 
+
 function openSampleMap(rowJson) {
     let row;
     try { row = typeof rowJson === 'string' ? JSON.parse(rowJson) : rowJson; }
     catch (e) { console.error(e); return; }
- 
+
     const info = row.sample_info;
- 
+
     document.getElementById('sampleMapTitle').textContent =
         `${row.vehicle_number || '-'} — ${row.vendor_name || '-'}`;
- 
+
     const body   = document.getElementById('sampleMapBody');
-    const pager  = document.getElementById('sampleMapPager');
-    const summry = document.getElementById('sampleMapSummary');
- 
+    const badges = document.getElementById('sampleMapBadges');
+    const wrap   = document.getElementById('sampleMapTableWrap');
+    const pager  = document.getElementById('pagination-samplemap');
+    const empty  = document.getElementById('sampleMapEmpty');
+
     body.querySelectorAll('.sample-dot').forEach(d => d.remove());
- 
+    document.getElementById('sampleMapRows').innerHTML = '';
+
     if (!info || !Array.isArray(info.attempts) || info.attempts.length === 0) {
+        badges.innerHTML = '';
+        wrap.classList.add('d-none');
         pager.classList.add('d-none');
-        summry.innerHTML =
-            `<div class="alert alert-secondary mb-0 text-center">
+        empty.innerHTML =
+            `<div class="alert alert-secondary mb-0 mt-3 text-center">
                 No sample position data recorded for this vehicle.
              </div>`;
         showSampleMapModal();
         return;
     }
- 
-    const b = info.bounds || {};
+
+    empty.innerHTML = '';
+    wrap.classList.remove('d-none');
+    pager.classList.remove('d-none');
+
     sampleMapState = {
         attempts: info.attempts,
-        bounds: {
-            xMin: b.x_min !== undefined ? b.x_min : 35,
-            xMax: b.x_max !== undefined ? b.x_max : 100,
-            yMin: b.y_min !== undefined ? b.y_min : 40,
-            yMax: b.y_max !== undefined ? b.y_max : 80
-        },
-        page: 0,
-        perPage: sampleMapPerPage(),
-        info: info
+        bounds:   truckBounds(info),
+        page:     1,
+        perPage:  sampleMapPerPage(),
+        info:     info,
+        row:      row
     };
- 
+
     renderSampleMapPage();
     showSampleMapModal();
 }
- 
-function sampleMapPage(delta) {
-    const pages = Math.ceil(sampleMapState.attempts.length / sampleMapState.perPage);
-    const next  = sampleMapState.page + delta;
-    if (next < 0 || next >= pages) return;
-    sampleMapState.page = next;
+
+function sampleMapGoto(page) {
+    sampleMapState.page = page;
     renderSampleMapPage();
 }
- 
+
 function renderSampleMapPage() {
-    const { attempts, bounds, page, perPage, info } = sampleMapState;
- 
+    const { attempts, bounds, page, perPage, info, row } = sampleMapState;
+
     const body   = document.getElementById('sampleMapBody');
-    const pager  = document.getElementById('sampleMapPager');
-    const summry = document.getElementById('sampleMapSummary');
- 
+    const badges = document.getElementById('sampleMapBadges');
+    const tbody  = document.getElementById('sampleMapRows');
+
     body.querySelectorAll('.sample-dot').forEach(d => d.remove());
- 
+
     const total = attempts.length;
-    const pages = Math.ceil(total / perPage);
-    const start = page * perPage;
+    const start = (page - 1) * perPage;
     const slice = attempts.slice(start, start + perPage);
- 
-    const pct = (v, lo, hi) => {
-        if (v === null || v === undefined || hi === lo) return 50;
-        return Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
-    };
- 
-    const dotClass = a => {
-        if (a.status === 'SUCCESS') return 'sample-dot-ok';
-        if (a.reason === 'HARD_MATERIAL') return 'sample-dot-hard';
-        return 'sample-dot-fail';
-    };
- 
+
+    // ── Dots on the truck body ──────────────────────────────────────────────
     slice.forEach(a => {
         const dot = document.createElement('div');
-        dot.className = 'sample-dot ' + dotClass(a);
-        dot.style.left = `calc(6% + ${pct(a.x, bounds.xMin, bounds.xMax) * 0.88}%)`;
-        dot.style.top  = `calc(12% + ${pct(a.y, bounds.yMin, bounds.yMax) * 0.72}%)`;
+        dot.className = 'sample-dot ' + sampleDotClass(a);
+        dot.style.left = truckLeftPct(a.x) + '%';
+        dot.style.top  = truckTopPct(a.y) + '%';
         dot.textContent = a.seq;
         dot.title =
-            `#${a.seq} · Area ${a.area ?? '-'} · X ${a.x ?? '-'} Y ${a.y ?? '-'}\n` +
+            `#${a.seq} · Area ${a.area ?? '-'}\n` +
             `${a.status === 'SUCCESS' ? 'Collected' : 'Failed: ' + (a.reason || 'unknown')}\n` +
-            `${a.time || ''}`;
+            `${a.time || ''}\nClick to view image`;
+        dot.onclick = () => openSampleAttemptImage(a.seq);
         body.appendChild(dot);
     });
- 
-    if (total > perPage) {
-        pager.classList.remove('d-none');
-        document.getElementById('sampleMapRange').textContent =
-            `Showing ${start + 1}–${Math.min(start + perPage, total)} of ${total} attempts`;
-        document.getElementById('sampleMapPrev').disabled = (page === 0);
-        document.getElementById('sampleMapNext').disabled = (page >= pages - 1);
-    } else {
-        pager.classList.add('d-none');
-    }
- 
+
+    // ── Counters + collection mode ──────────────────────────────────────────
     const mode = info.collection_mode === 'MANUAL'
         ? `<span class="badge bg-warning text-dark">MANUAL COLLECTION${
               info.manual_reason ? ' · ' + info.manual_reason.replaceAll('_', ' ') : ''}</span>`
         : `<span class="badge bg-secondary">AUTO</span>`;
- 
+
+    badges.innerHTML = `
+        <div>
+            <span class="badge bg-success">${info.successful || 0} collected</span>
+            <span class="badge bg-danger ms-1">${info.failed || 0} failed</span>
+        </div>
+        <div>${mode}</div>`;
+
+    // ── Rows ────────────────────────────────────────────────────────────────
     const badgeFor = a => {
         if (a.status === 'SUCCESS') return 'bg-success';
         if (a.reason === 'HARD_MATERIAL') return 'bg-primary';
         return 'bg-danger';
     };
- 
-    const rows = slice.map(a => `
+
+    tbody.innerHTML = slice.map(a => {
+        const hasImg = !!sampleAttemptImageUrl(a, row);
+        const imgBtn = hasImg
+            ? `<button class="btn btn-sm btn-outline-dark sample-img-btn"
+                       onclick="openSampleAttemptImage(${a.seq})">
+                   <i class="fas fa-image"></i> View
+               </button>`
+            : `<span class="text-muted small">&mdash;</span>`;
+        return `
         <tr>
-            <td><span class="sample-seq ${dotClass(a)}">${a.seq}</span></td>
+            <td><span class="sample-seq ${sampleDotClass(a)}">${a.seq}</span></td>
             <td>${a.area ?? '-'}</td>
-            <td>${a.x ?? '-'}, ${a.y ?? '-'}</td>
             <td><span class="badge ${badgeFor(a)}">${a.status}</span></td>
             <td>${a.reason ? a.reason.replaceAll('_', ' ') : '-'}</td>
             <td class="text-muted small">${a.time || '-'}</td>
-        </tr>`).join('');
- 
-    summry.innerHTML = `
-        <div class="d-flex justify-content-between align-items-center mb-2">
-            <div>
-                <span class="badge bg-success">${info.successful || 0} collected</span>
-                <span class="badge bg-danger ms-1">${info.failed || 0} failed</span>
-            </div>
-            <div>${mode}</div>
-        </div>
-        <table class="table table-bordered table-sm text-center align-middle mb-0 sample-table">
-            <thead class="table-dark">
-                <tr>
-                    <th>#</th><th>AREA</th><th>X, Y</th>
-                    <th>STATUS</th><th>REASON</th><th>TIME</th>
-                </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-        </table>`;
+            <td>${imgBtn}</td>
+        </tr>`;
+    }).join('');
+
+    // Same pagination template as the History and Vehicle Master tabs
+    setupPagination(total, page, perPage, 'samplemap');
 }
- 
+
 function showSampleMapModal() {
     if (!sampleMapModalInstance) {
         sampleMapModalInstance = new bootstrap.Modal(document.getElementById('sampleMapModal'));
     }
     sampleMapModalInstance.show();
 }
- 
+
 // Re-fit when the window is resized while the modal is open, so rotating a
 // tablet or snapping the window doesn't reintroduce a scrollbar.
-window.addEventListener('resize', function () {
+window.addEventListener('resize', () => {
     const el = document.getElementById('sampleMapModal');
     if (!el || !el.classList.contains('show')) return;
     if (!sampleMapState.attempts.length) return;
- 
-    const per = sampleMapPerPage();
-    if (per === sampleMapState.perPage) return;
- 
-    // Keep the first visible attempt visible after the page size changes
-    const firstVisible = sampleMapState.page * sampleMapState.perPage;
-    sampleMapState.perPage = per;
-    sampleMapState.page = Math.floor(firstVisible / per);
+    sampleMapState.perPage = sampleMapPerPage();
+    sampleMapState.page = 1;
     renderSampleMapPage();
 });
 
-function showHardMaterialModal(data) {
-    hardBlockedUID = data.uid;
- 
-    const label = document.getElementById('hardBlockedVehicle');
-    if (label) label.textContent = `${data.vehicle_number || '-'} — ${data.vendor_name || '-'}`;
- 
-    if (hardModalOpen) return;                 // don't re-open on every poll
- 
-    if (!hardModalInstance) {
-        hardModalInstance = new bootstrap.Modal(
-            document.getElementById('hardMaterialModal'),
-            { backdrop: 'static', keyboard: false }
-        );
+
+// ════════════════════════════════════════════════════════════════════════════
+// DASHBOARD — status panel + live truck map
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * What each state actually means, in plant language.
+ *
+ * `tone` drives the coloured left edge: idle / info / ok / warn / danger.
+ */
+const STATE_INFO = {
+    IDLE: {
+        tone: 'idle', head: 'Waiting for a vehicle',
+        desc: 'The RFID reader is armed. Nothing is being sampled right now.'
+    },
+    DB_CHECK: {
+        tone: 'info', head: 'Identifying vehicle',
+        desc: 'RFID tags read. Looking the vehicle up in the vehicle master.'
+    },
+    WAITING_FOR_DB: {
+        tone: 'warn', head: 'Vehicle not registered',
+        desc: 'This RFID is not in the vehicle master. Add the vehicle to let the cycle continue.'
+    },
+    WAITING_FOR_VEHICLE_MASTER: {
+        tone: 'warn', head: 'Vehicle not registered',
+        desc: 'This RFID is not in the vehicle master. Add the vehicle to let the cycle continue.'
+    },
+    OPEN_BARRIER: {
+        tone: 'info', head: 'Opening barrier',
+        desc: 'Green signal sent to the barrier PLC.'
+    },
+    BARRIER_OPENING: {
+        tone: 'info', head: 'Opening barrier',
+        desc: 'Waiting for the barrier to confirm it is fully open.'
+    },
+    SET_BUCKET: {
+        tone: 'info', head: 'Setting bucket',
+        desc: 'Writing the bucket number to the PLC so the sample lands in the right bin.'
+    },
+    VEHICLE_PLACEMENT: {
+        tone: 'info', head: 'Positioning vehicle',
+        desc: 'Waiting for the truck to settle on the turntable. Sample points are being planned across the body.'
+    },
+    CLOSE_BARRIER: {
+        tone: 'info', head: 'Closing barrier',
+        desc: 'Red signal sent — holding the vehicle for sampling.'
+    },
+    BARRIER_CLOSING: {
+        tone: 'info', head: 'Closing barrier',
+        desc: 'Waiting for the barrier to confirm it is closed.'
+    },
+    AUGER_HOME_POS: {
+        tone: 'info', head: 'Homing auger',
+        desc: 'Auger travelling back to its home position before the next move.'
+    },
+    CYCLE_POSITION: {
+        tone: 'info', head: 'Moving auger to sample point',
+        desc: 'X and Y are being driven together to the next sample point on the load.'
+    },
+    CYCLE_CONFIRM: {
+        tone: 'info', head: 'AI checking auger position',
+        desc: 'The vision model is confirming the auger is over coal before the cycle is allowed to start.'
+    },
+    CYCLE_CAPTURE: {
+        tone: 'info', head: 'Collecting sample',
+        desc: 'Auger is drilling into the load. Waiting for the Z-UP feedback that ends the cycle.'
+    },
+    CYCLE_DONE: {
+        tone: 'info', head: 'Finishing cycle',
+        desc: 'Sample taken. Waiting for the cycle-complete confirmation from the PLC.'
+    },
+    SAMPLE_COLLECTION: {
+        tone: 'info', head: 'Discharging sample',
+        desc: 'Sample being discharged into the bucket.'
+    },
+    CYCLE_EMERGENCY_WAIT: {
+        tone: 'danger', head: 'EMERGENCY — cycle paused',
+        desc: 'Emergency stop is active. The cycle resumes automatically once it is cleared at the panel.'
+    },
+    AI_BLOCKED_WAIT: {
+        tone: 'warn', head: 'Waiting for operator — AI check failed',
+        desc: 'The model could not confirm the auger is over coal. Choose continue or manual on the popup.'
+    },
+    HARD_BLOCKED_WAIT: {
+        tone: 'warn', head: 'Waiting for operator — hard material',
+        desc: 'Hard material hit twice in a row. Automatic attempts stopped to protect the auger.'
+    },
+    RED_SIGNAL: {
+        tone: 'info', head: 'Holding vehicle',
+        desc: 'Red signal held while the last sample is finished.'
+    },
+    COMPLETE_FINAL: {
+        tone: 'ok', head: 'Finishing up',
+        desc: 'Generating the report, sending the print slip and preparing to release the vehicle.'
+    },
+    GREEN_SIGNAL: {
+        tone: 'ok', head: 'Releasing vehicle',
+        desc: 'Green signal sent. The vehicle may leave the platform.'
+    },
+    COMPLETE: {
+        tone: 'ok', head: 'Cycle complete',
+        desc: 'Session closed and logged. Ready for the next vehicle.'
+    },
+    ERROR: {
+        tone: 'danger', head: 'Error — resetting',
+        desc: 'The session was aborted. All devices are being reset to a known state.'
     }
- 
-    const btn = document.getElementById('hardManualBtn');
-    if (btn) btn.disabled = false;
- 
-    hardModalOpen = true;
-    hardModalInstance.show();
+};
+
+const TONE_CLASS = {
+    idle:   { panel: 'state-idle',   badge: 'bg-secondary', bar: 'bg-secondary' },
+    info:   { panel: '',             badge: 'bg-primary',   bar: 'bg-primary' },
+    ok:     { panel: 'state-ok',     badge: 'bg-success',   bar: 'bg-success' },
+    warn:   { panel: 'state-warn',   badge: 'bg-warning text-dark', bar: 'bg-warning' },
+    danger: { panel: 'state-danger', badge: 'bg-danger',    bar: 'bg-danger' }
+};
+
+function fmtMMSS(totalSeconds) {
+    const s = Math.max(0, parseInt(totalSeconds || 0, 10));
+    return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 }
- 
-function handleHardMaterialDecision() {
-    if (!hardBlockedUID) { alert('No active session to answer.'); return; }
- 
-    const btn = document.getElementById('hardManualBtn');
-    if (btn) btn.disabled = true;              // guard against a double click
- 
-    fetch('/api/ai_position_decision/', {
-        method: 'POST',
-        headers: { 'X-CSRFToken': csrftoken, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uid: hardBlockedUID, decision: 'manual' })
-    })
-    .then(r => r.json())
-    .then(res => {
-        if (res.success) {
-            hardModalOpen = false;
-            if (hardModalInstance) hardModalInstance.hide();
-        } else {
-            if (btn) btn.disabled = false;
-            alert('❌ Could not send acknowledgement: ' + (res.error || 'Unknown error'));
-        }
-    })
-    .catch(err => {
-        if (btn) btn.disabled = false;
-        console.error(err);
-        alert('❌ Network error while sending the acknowledgement');
+
+function renderStatusPanel(data) {
+    const panel = document.getElementById('statusPanel');
+    if (!panel || !data) return;
+
+    const state = data.current_state || 'IDLE';
+    const meta  = STATE_INFO[state] || {
+        tone: 'info', head: state.replaceAll('_', ' '),
+        desc: 'Cycle in progress.'
+    };
+
+    // Emergency / manual override whatever the state says
+    let tone = meta.tone;
+    let desc = meta.desc;
+    if (data.emergency === 'ACTIVE') {
+        tone = 'danger';
+        desc = 'EMERGENCY STOP is active at the panel. Everything is held until it is cleared.';
+    } else if (data.auto_manual === 'ACTIVE') {
+        tone = 'warn';
+        desc = 'The sampler PLC is in MANUAL. Automatic sampling is paused until it is switched back.';
+    }
+
+    const cls = TONE_CLASS[tone] || TONE_CLASS.info;
+
+    panel.classList.remove('state-idle', 'state-ok', 'state-warn', 'state-danger');
+    if (cls.panel) panel.classList.add(cls.panel);
+
+    const badge = document.getElementById('currentState');
+    badge.className = 'badge fs-6 ' + cls.badge;
+    badge.textContent = state;
+
+    document.getElementById('statusHeadline').textContent = meta.head;
+    document.getElementById('statusDetail').textContent   = desc;
+    document.getElementById('statusBucket').textContent   = data.bucket_number ?? '—';
+    document.getElementById('statusUid').textContent      = data.uid || '—';
+
+    // ── Progress ────────────────────────────────────────────────────────────
+    const info   = data.sample_info || {};
+    const total  = info.total_cycles || 3;
+    const done   = info.successful || 0;
+    const failed = info.failed || 0;
+    const pct    = Math.min(100, Math.round((done / total) * 100));
+
+    const bar = document.getElementById('statusProgress');
+    bar.className = 'progress-bar ' + cls.bar;
+    bar.style.width = pct + '%';
+
+    const currentCycle = Math.min(total, done + 1);
+    const modeTxt = info.collection_mode === 'MANUAL' ? 'MANUAL' : 'AUTO';
+
+    const modeBadge = document.getElementById('statusMode');
+    modeBadge.textContent = modeTxt;
+    modeBadge.className = 'badge ms-auto ' +
+        (modeTxt === 'MANUAL' ? 'bg-warning text-dark' : 'bg-secondary');
+
+    document.getElementById('statusCounters').textContent =
+        (data.uid
+            ? `Cycle ${currentCycle} of ${total} · ${done} collected · ${failed} failed`
+            : `Idle · 0 of ${total}`);
+
+    // Re-anchor the local ticker on every poll. The server value is
+    // authoritative; the ticker only fills the 2 s gaps between polls so the
+    // clock visibly moves instead of jumping in 2-second steps.
+    elapsedBaseSeconds = Number(data.elapsed_seconds) || 0;
+    elapsedBaseAt      = Date.now();
+    elapsedRunning     = !!data.elapsed_running && !!data.uid;
+
+    document.getElementById('statusElapsed').textContent =
+        data.uid ? fmtMMSS(elapsedBaseSeconds) : '00:00';
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ELAPSED CLOCK — smooth the 2 s polling gap
+// ════════════════════════════════════════════════════════════════════════════
+
+let elapsedBaseSeconds = 0;   // last value the server reported
+let elapsedBaseAt      = 0;   // Date.now() when we received it
+let elapsedRunning     = false;
+
+function tickElapsed() {
+    if (!elapsedRunning) return;          // finished cycle: frozen at the total
+    const el = document.getElementById('statusElapsed');
+    if (!el) return;
+    const extra = Math.floor((Date.now() - elapsedBaseAt) / 1000);
+    el.textContent = fmtMMSS(elapsedBaseSeconds + extra);
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    setInterval(tickElapsed, 1000);
+});
+
+/**
+ * Live sample map on the dashboard.
+ *
+ * Same geometry as the history modal: auger X runs along the trailer, auger Y
+ * across it. The point currently being sampled blinks yellow, then turns green
+ * or red the moment the manager records the attempt.
+ */
+function renderLiveTruck(data) {
+    const body = document.getElementById('liveTruckBody');
+    if (!body) return;
+
+    body.querySelectorAll('.sample-dot').forEach(d => d.remove());
+
+    const info = (data && data.sample_info) || null;
+    if (!info) return;
+
+    const bounds = truckBounds(info);
+
+    const place = (p, cls, label, title) => {
+        if (!p) return;
+        const dot = document.createElement('div');
+        dot.className = 'sample-dot ' + cls;
+        dot.style.left = truckLeftPct(p.x) + '%';
+        dot.style.top  = truckTopPct(p.y) + '%';
+        dot.textContent = label;
+        dot.style.cursor = 'default';
+        dot.title = title;
+        body.appendChild(dot);
+    };
+
+    (info.attempts || []).forEach(a => {
+        place(a, sampleDotClass(a), a.seq,
+            `#${a.seq} · Area ${a.area ?? '-'}\n` +
+            `${a.status === 'SUCCESS' ? 'Collected' : 'Failed: ' + (a.reason || 'unknown')}\n` +
+            `${a.time || ''}`);
     });
+
+    if (info.current) {
+        const seq = (info.attempts || []).length + 1;
+        place(info.current, 'sample-dot-live', seq,
+            `#${seq} · Area ${info.current.area ?? '-'}\nSampling now…`);
+    }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// DASHBOARD — daily stat tiles
+// ════════════════════════════════════════════════════════════════════════════
+
+function statPct(part, whole) {
+    if (!whole) return '0%';
+    return Math.round((part / whole) * 100) + '%';
+}
+
+function statDelta(today, yest) {
+    const d = (today || 0) - (yest || 0);
+    if (d === 0) return 'same as yesterday';
+    return (d > 0 ? '+' : '') + d + ' vs yesterday';
+}
+
+function renderDashboardStats(s) {
+    if (!s || !s.success) return;
+
+    const t = s.today || {};
+    const y = s.yesterday || {};
+    const w = s.week || {};
+
+    // ── Arrived ─────────────────────────────────────────────────────────────
+    document.getElementById('statArrived').textContent = t.arrived ?? 0;
+    document.getElementById('statArrivedSub').textContent =
+        `yesterday ${y.arrived ?? 0} · ${statDelta(t.arrived, y.arrived)}`;
+
+    document.getElementById('statArrivedTile').setAttribute('data-tooltip',
+        `VEHICLES ARRIVED TODAY\n` +
+        `Every session opened in VEHICLE_LOGS since midnight.\n\n` +
+        `Today: ${t.arrived ?? 0}\n` +
+        `  · scanned successfully: ${t.completed ?? 0}\n` +
+        `  · failed: ${t.failed ?? 0}\n` +
+        `  · in progress: ${t.running ?? 0}\n\n` +
+        `Yesterday: ${y.arrived ?? 0}\n` +
+        `Last 7 days: ${w.arrived ?? 0} (${w.avg_arrived ?? 0}/day)`
+    );
+
+    // ── Scanned ─────────────────────────────────────────────────────────────
+    document.getElementById('statScanned').textContent = t.completed ?? 0;
+    document.getElementById('statScannedSub').textContent =
+        `avg ${fmtMMSS(t.avg_seconds)} · yesterday ${y.completed ?? 0}`;
+
+    document.getElementById('statScannedTile').setAttribute('data-tooltip',
+        `SCANNED SUCCESSFULLY\n` +
+        `Sessions that reached COMPLETED. Cycle time is measured from the RFID\n` +
+        `read to the log being closed.\n\n` +
+        `Today: ${t.completed ?? 0} of ${t.arrived ?? 0} (${statPct(t.completed, t.arrived)})\n` +
+        `  · average cycle: ${fmtMMSS(t.avg_seconds)}\n` +
+        `  · fastest: ${fmtMMSS(t.min_seconds)}   slowest: ${fmtMMSS(t.max_seconds)}\n` +
+        `  · timed sessions: ${t.timed ?? 0}\n\n` +
+        `Yesterday: ${y.completed ?? 0} · average ${fmtMMSS(y.avg_seconds)}\n` +
+        `Last 7 days: ${w.completed ?? 0} (${w.avg_completed ?? 0}/day)`
+    );
+
+    // ── Failed ──────────────────────────────────────────────────────────────
+    document.getElementById('statFailed').textContent = t.failed ?? 0;
+    document.getElementById('statFailedSub').textContent =
+        `yesterday ${y.failed ?? 0}` + (t.last_fail ? ` · last ${t.last_fail}` : '');
+
+    document.getElementById('statFailedTile').setAttribute('data-tooltip',
+        `FAILED SESSIONS\n` +
+        `Sessions marked ERROR — aborted, reset, or timed out mid-cycle.\n` +
+        `Use Retake Failed Cycle to re-run the most recent one.\n\n` +
+        `Today: ${t.failed ?? 0} of ${t.arrived ?? 0} (${statPct(t.failed, t.arrived)})\n` +
+        (t.last_fail ? `  · most recent at ${t.last_fail}\n` : '') +
+        `  · still in progress: ${t.running ?? 0}\n\n` +
+        `Yesterday: ${y.failed ?? 0} of ${y.arrived ?? 0} (${statPct(y.failed, y.arrived)})`
+    );
+}
+
+function fetchDashboardStats() {
+    fetch('/api/dashboard_stats/')
+        .then(r => r.json())
+        .then(renderDashboardStats)
+        .catch(err => console.error('Dashboard stats update failed:', err));
+}
+
+// Separate listener on purpose — leaves the existing DOMContentLoaded block,
+// and its camera/status polling intervals, completely untouched.
+document.addEventListener('DOMContentLoaded', function () {
+    fetchDashboardStats();
+    setInterval(fetchDashboardStats, 30000);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// DASHBOARD — fit the shell to whatever space is actually left
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Size the dashboard to the real gap between where it starts and where the
+ * footer begins, instead of assuming a fixed header height. The CSS
+ * calc(100vh - var(--dash-offset)) stays as the pre-JS fallback.
+ */
+function fitDashboardShell() {
+    const shell = document.querySelector('#DASHBOARD .dash-shell');
+    if (!shell) return;
+
+    // Tab hidden or not laid out yet — measuring now would give nonsense
+    if (shell.offsetParent === null) return;
+
+    const top = shell.getBoundingClientRect().top;
+    if (top <= 0) return;
+
+    const footer = document.querySelector('.footer');
+    const reserve = (footer ? footer.offsetHeight : 24) + 26;   // footer + card padding
+
+    shell.style.height = Math.max(400, window.innerHeight - top - reserve) + 'px';
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    fitDashboardShell();
+    setTimeout(fitDashboardShell, 400);   // after webfonts/images settle the layout
+    window.addEventListener('resize', fitDashboardShell);
+
+    document.querySelectorAll('[data-bs-target="#DASHBOARD"]').forEach(btn => {
+        btn.addEventListener('shown.bs.tab', fitDashboardShell);
+    });
+});

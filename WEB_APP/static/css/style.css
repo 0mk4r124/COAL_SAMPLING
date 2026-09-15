@@ -322,41 +322,65 @@ body {
     font-size: 0.85rem;
 }
  
-/* |* Diagram is sized by HEIGHT, so widening the modal cannot make it taller.
-   Widths follow from the aspect ratios and the row stays centred. *| */
+/* ══ TRUCK DIAGRAM (history modal) ═══════════════════════════════════════════
+   Sized by HEIGHT so widening the modal can never make it taller. The body
+   grows to fill the row; the head stays a fixed near-square block on the right,
+   matching the physical layout (nose of the trailer at the cab end).          */
 .truck-diagram {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 14px;
-    height: min(30vh, 240px);
+    height: min(28vh, 220px);
     padding: 4px 0;
 }
- 
+
 .truck-body {
     position: relative;
-    height: 82%;
-    aspect-ratio: 5 / 2;
+    height: 86%;
     width: auto;
-    flex: 0 0 auto;
+    flex: 1 1 auto;
     border: 2px solid #0d6efd;
     border-radius: 6px;
     background: #f8f9fa;
-    width: 55vw;
+    overflow: hidden;
 }
- 
-/* |* Square head, 22% taller than the body so it reads as a cab, not a line *| */
+
 .truck-cabin {
     position: relative;
     height: 100%;
-    aspect-ratio: 1 / 1;
+    aspect-ratio: 1.15 / 1;
     width: auto;
     flex: 0 0 auto;
     border: 2px solid #0d6efd;
     border-radius: 6px;
     background: #f8f9fa;
 }
- 
+
+/* Grey nose of the trailer — first 20% of X travel, never sampled */
+.truck-shallow {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 30%;
+    background: #dee2e6;
+    border-right: 2px dashed #adb5bd;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.truck-shallow span {
+    font-size: 0.62rem;
+    letter-spacing: 1px;
+    color: #6c757d;
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.2;
+}
+
 .truck-body-label,
 .truck-cabin-label {
     position: absolute;
@@ -368,7 +392,7 @@ body {
     color: #adb5bd;
     pointer-events: none;
 }
- 
+
 .sample-dot {
     position: absolute;
     width: 22px;
@@ -377,7 +401,7 @@ body {
     transform: translate(-50%, -50%);
     border: 2px solid #fff;
     box-shadow: 0 0 4px rgba(0, 0, 0, 0.35);
-    cursor: pointer;          /* was: cursor: help  */
+    cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -385,21 +409,39 @@ body {
     font-size: 0.7rem;
     font-weight: 700;
     line-height: 1;
+    z-index: 2;
+    transition: transform 0.12s ease-out;
 }
- 
+
+.sample-dot:hover {
+    transform: translate(-50%, -50%) scale(1.25);
+}
+
 .sample-dot-ok   { background: #198754; }
 .sample-dot-fail { background: #dc3545; animation: sample-blink 1.1s ease-in-out infinite; }
 .sample-dot-hard { background: #0d6efd; }
- 
+.sample-dot-live {
+    background: #ffc107;
+    color: #212529;
+    border-color: #212529;
+    animation: sample-pulse 1s ease-in-out infinite;
+}
+
 @keyframes sample-blink {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.25; }
 }
- 
-@media (prefers-reduced-motion: reduce) {
-    .sample-dot-fail { animation: none; }
+
+@keyframes sample-pulse {
+    0%, 100% { opacity: 1;   box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.75); }
+    50%      { opacity: 0.6; box-shadow: 0 0 0 9px rgba(255, 193, 7, 0); }
 }
- 
+
+@media (prefers-reduced-motion: reduce) {
+    .sample-dot-fail,
+    .sample-dot-live { animation: none; }
+}
+
 .sample-seq {
     display: inline-flex;
     align-items: center;
@@ -412,7 +454,8 @@ body {
     font-weight: 700;
 }
 .sample-seq.sample-dot-fail { animation: none; }
- 
+.sample-seq.sample-dot-live { animation: none; }
+
 .sample-dot-legend {
     display: inline-block;
     width: 12px;
@@ -424,3 +467,465 @@ body {
 .legend-ok   { background: #198754; }
 .legend-fail { background: #dc3545; }
 .legend-hard { background: #0d6efd; }
+.legend-live { background: #ffc107; }
+
+/* ══ DASHBOARD SHELL ═════════════════════════════════════════════════════════
+   One fixed-height flex shell so the page never scrolls. Only the camera row
+   flexes — everything else has a natural height — so a shorter monitor shrinks
+   the video and nothing else. If the layout is clipped or leaves a gap on a
+   given screen, tune --dash-offset and nothing else.                          */
+/* --dash-offset is only the pre-JS fallback now; fitDashboardShell() measures
+   the real value once the page is laid out. */
+:root { --dash-offset: 210px; }
+
+#DASHBOARD .dash-shell {
+    height: calc(100vh - var(--dash-offset));
+    min-height: 400px;
+    overflow: hidden;
+}
+
+/* Columns must be capped at the shell height, otherwise a tall rail pushes its
+   own bottom out of the clip instead of letting the INFO box shrink. */
+#DASHBOARD .dash-shell > [class*="col-"] {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 100%;
+    overflow: hidden;
+}
+
+/* ── Vehicle / vendor header — bigger, this is the thing operators read from
+   across the room ─────────────────────────────────────────────────────────── */
+.dash-vehicle-bar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 18px;
+    border: 2px solid #0d6efd;
+    border-radius: 6px;
+    background: #eef5ff;
+    letter-spacing: 1px;
+    color: #0b3d91;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+#dashVehicleNumber {
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: 2px;
+}
+
+#dashVendorName {
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+.dash-vehicle-sep {
+    color: #6c9bd8;
+    font-size: 1.5rem;
+}
+
+.dash-vehicle-bar .dash-legend {
+    margin-left: auto;
+    display: flex;
+    gap: 12px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: #495057;
+    align-self: center;
+}
+
+/* ── Status box — taller, larger headline ─────────────────────────────────── */
+#DASHBOARD #statusPanel {
+    flex: 0 0 auto;
+    margin-bottom: 0;
+    padding: 12px 14px;
+}
+
+#DASHBOARD #statusPanel #currentState {
+    font-size: 0.95rem;
+    padding: 0.4em 0.7em;
+}
+
+#DASHBOARD #statusHeadline {
+    font-size: 1.2rem !important;
+    line-height: 1.25;
+    margin-top: 6px !important;
+}
+
+/* ── Info box — shrinks first when space runs short ───────────────────────── */
+#DASHBOARD .dash-info {
+    flex: 1 1 0;
+    min-height: 70px;
+    overflow: auto;         /* scrolls INSIDE the box, never the page */
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: #fff;
+    padding: 10px 12px;
+    font-size: 0.9rem;
+}
+
+#DASHBOARD .dash-info .dash-info-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 3px 0;
+}
+
+/* ── Stat tiles — taller, bigger numbers ──────────────────────────────────── */
+.dash-stats {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.stat-tile {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 58px;
+    padding: 9px 13px;
+    border: 1px solid #dee2e6;
+    border-left: 6px solid #6c757d;
+    border-radius: 6px;
+    background: #fff;
+    cursor: help;
+}
+
+.stat-label {
+    font-size: 0.73rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: #343a40;
+    cursor: pointer;
+    line-height: 1.2;
+}
+
+.stat-sub {
+    font-size: 0.68rem;
+    color: #868e96;
+    line-height: 1.3;
+    margin-top: 3px;
+}
+
+.stat-value {
+    font-size: 2.1rem;
+    font-weight: 700;
+    line-height: 1;
+    color: #212529;
+}
+
+/* ══ LIVE TRUCK MAP (dashboard, right rail) ══════════════════════════════════
+   Same geometry as the history modal, rotated: the trailer runs top-to-bottom
+   so it fits a narrow column beside the camera feeds. Auger X maps to the
+   VERTICAL axis here and auger Y to the horizontal one.                       */
+/* .live-truck-card {
+    display: flex;
+    flex-direction: column;
+    padding: 8px;
+    background: #fff;
+    min-height: 100%;
+}
+
+.live-truck-title {
+    font-size: 0.72rem;
+    letter-spacing: 2px;
+    font-weight: 700;
+    color: #6c757d;
+    text-align: center;
+    margin-bottom: 6px;
+}
+
+.live-truck {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    min-height: 320px;
+}
+
+.live-truck-cabin {
+    flex: 0 0 auto;
+    width: 74%;
+    aspect-ratio: 1.6 / 1;
+    border: 2px solid #0d6efd;
+    border-radius: 6px;
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+    letter-spacing: 2px;
+    color: #adb5bd;
+}
+
+.live-truck-body {
+    position: relative;
+    flex: 1 1 auto;
+    width: 88%;
+    border: 2px solid #0d6efd;
+    border-radius: 6px;
+    background: #f8f9fa;
+    overflow: hidden;
+}
+
+/* Rotated shallow area: top 20% of the body */
+.live-truck-shallow {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 20%;
+    background: #dee2e6;
+    border-bottom: 2px dashed #adb5bd;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+    letter-spacing: 1px;
+    color: #6c757d;
+    font-weight: 600;
+    pointer-events: none;
+}
+
+.live-truck-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    font-size: 0.68rem;
+    color: #495057;
+    margin-top: 8px;
+} */
+
+/* ══ SAMPLE MAP MODAL ════════════════════════════════════════════════════════ */
+#sampleMapModal .sample-table th {
+    font-size: 0.72rem;
+    letter-spacing: 0.5px;
+}
+
+#sampleMapModal .modal-body {
+    overflow: hidden;
+    padding: 10px 16px;
+}
+
+#sampleMapModal #pagination-samplemap .pagination {
+    --bs-pagination-padding-y: 0.15rem;
+    --bs-pagination-padding-x: 0.5rem;
+    --bs-pagination-font-size: 0.8rem;
+}
+
+/* Image viewer must sit above the sample map modal it was opened from */
+#imageModal { z-index: 1075; }
+
+.sample-img-btn {
+    --bs-btn-padding-y: 0.1rem;
+    --bs-btn-padding-x: 0.4rem;
+    --bs-btn-font-size: 0.72rem;
+}
+
+/* ══ DASHBOARD STATUS PANEL ══════════════════════════════════════════════════ */
+#statusPanel { border-left: 6px solid #0d6efd; }
+#statusPanel.state-warn   { border-left-color: #ffc107; }
+#statusPanel.state-danger { border-left-color: #dc3545; }
+#statusPanel.state-ok     { border-left-color: #198754; }
+#statusPanel.state-idle   { border-left-color: #6c757d; }
+
+/* ── Camera row ────────────────────────────────────────────────────────────
+   Grid, not a Bootstrap row. Rows/columns sized in fr with min-height:0 shrink
+   predictably; a .row with its negative margins, gutters and flex-wrap does not,
+   which is what pushed the second feed off the bottom of the card.            */
+#DASHBOARD .dash-cams {
+    flex: 1 1 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 5fr 7fr;
+    gap: 8px;
+}
+
+#DASHBOARD .dash-cam-col {
+    display: grid;
+    grid-template-rows: 1fr 1fr;
+    gap: 8px;
+    min-height: 0;
+    min-width: 0;
+}
+
+#DASHBOARD .dash-cam-main {
+    display: grid;
+    min-height: 0;
+    min-width: 0;
+}
+
+#DASHBOARD .video-box,
+#DASHBOARD .video-box-lg {
+    height: 100%;
+    width: 100%;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border: 2px solid #dee2e6;
+    border-radius: 6px;
+    background: #f1f3f5;
+    font-size: 0.8rem;
+    color: #adb5bd;
+}
+
+#DASHBOARD .video-box img,
+#DASHBOARD .video-box-lg img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+}
+
+/* ── Live truck map strip ──────────────────────────────────────────────────
+   Short on purpose: it shares the screen with three camera feeds, and the
+   information in it is three dots, not a picture.                            */
+.dash-truck-wrap {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: #fff;
+}
+
+.dash-truck-wrap .truck-diagram {
+    height: clamp(80px, 12.5vh, 124px);
+    gap: 10px;
+    padding: 2px 0;
+}
+
+.dash-truck-wrap .truck-cabin {
+    aspect-ratio: 1.35 / 1;
+}
+
+.dash-truck-wrap .truck-body-label,
+.dash-truck-wrap .truck-cabin-label {
+    font-size: 0.62rem;
+    letter-spacing: 1.5px;
+}
+
+.dash-truck-wrap .truck-shallow span {
+    font-size: 0.56rem;
+}
+
+/* ── Right rail ────────────────────────────────────────────────────────────
+   INFO keeps its natural height; STATUS and the stat tiles share whatever is
+   left, so nothing floats with dead space under it.                          */
+#DASHBOARD .dash-rail .dashboard-ctrl-btn {
+    flex: 0 0 auto;
+    font-size: 0.85rem;
+    padding: 0.3rem 0.5rem;
+}
+
+#DASHBOARD #statusPanel {
+    flex: 1 1 auto;
+    min-height: 96px;
+    margin-bottom: 0;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+#DASHBOARD .dash-info {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 42%;
+    overflow: auto;         /* scrolls INSIDE the box, never the page */
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background: #fff;
+    padding: 10px 12px;
+    font-size: 0.9rem;
+}
+
+.dash-stats {
+    flex: 2 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-height: 0;
+}
+
+/* ── Stat tiles ────────────────────────────────────────────────────────────
+   Each tile carries its own meaning in colour: today's arrivals in the same
+   blue as the status box, successes green, failures red. No greys — an
+   operator glancing at this from across the room reads colour before text.   */
+.stat-tile {
+    position: relative;
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 62px;
+    padding: 9px 13px;
+    border: 1px solid transparent;
+    border-left-width: 6px;
+    border-radius: 6px;
+    cursor: help;
+}
+
+.stat-label {
+    font-size: 0.73rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    line-height: 1.2;
+}
+
+.stat-sub {
+    font-size: 0.68rem;
+    line-height: 1.3;
+    margin-top: 3px;
+    opacity: 0.85;
+}
+
+.stat-value {
+    font-size: 2.1rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+/* Arrived — blue, matching the status box */
+.stat-tile.stat-arrived {
+    background: #e7f1ff;
+    border-color: #9ec5fe;
+    border-left-color: #0d6efd;
+}
+.stat-tile.stat-arrived .stat-label { color: #084298; }
+.stat-tile.stat-arrived .stat-sub   { color: #0d6efd; }
+.stat-tile.stat-arrived .stat-value { color: #0a58ca; }
+
+/* Scanned successfully — green */
+.stat-tile.stat-scanned {
+    background: #e6f4ec;
+    border-color: #a3cfbb;
+    border-left-color: #198754;
+}
+.stat-tile.stat-scanned .stat-label { color: #0a3622; }
+.stat-tile.stat-scanned .stat-sub   { color: #146c43; }
+.stat-tile.stat-scanned .stat-value { color: #146c43; }
+
+/* Failed — red */
+.stat-tile.stat-failed {
+    background: #fdecea;
+    border-color: #f1aeb5;
+    border-left-color: #dc3545;
+}
+.stat-tile.stat-failed .stat-label { color: #58151c; }
+.stat-tile.stat-failed .stat-sub   { color: #b02a37; }
+.stat-tile.stat-failed .stat-value { color: #b02a37; }

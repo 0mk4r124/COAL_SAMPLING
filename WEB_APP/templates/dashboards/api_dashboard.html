@@ -32,18 +32,56 @@
     <!-- ABF Tab -->
     <div class="tab-pane fade show" id="DASHBOARD">
         <div class="card shadow-sm">
-            <div class="card-body">
+            <div class="card-body dash-body">
+                <div class="row g-2 dash-shell">
 
-                <!-- State Display and Reset Button -->
-                <div class="row g-2 mb-3 align-items-center">
-                    <div class="col-md-10">
-                        <div class="alert alert-info mb-0 fs-2">
-                            <strong>Current State:</strong> <span id="currentState" class="badge bg-primary">IDLE</span>
-                            <br>
-                            <strong>Vehicle:</strong> <span id="dashVendorName">ABC Traders</span> | <span id="dashVehicleNumber">MH 12 AB 1234</span>
+                    <!-- ══════════ LEFT: header, live map, cameras ══════════ -->
+                    <div class="col-md-9 gap-2">
+
+                        <!-- Vehicle / vendor header -->
+                        <div class="dash-vehicle-bar">
+                            <span id="dashVehicleNumber">&mdash;</span>
+                            <span class="dash-vehicle-sep">&mdash;</span>
+                            <span id="dashVendorName">&mdash;</span>
+
+                            <span class="dash-legend">
+                                <span><span class="sample-dot-legend legend-live"></span>Sampling</span>
+                                <span><span class="sample-dot-legend legend-ok"></span>Collected</span>
+                                <span><span class="sample-dot-legend legend-fail"></span>Failed</span>
+                                <span><span class="sample-dot-legend legend-hard"></span>Hard material</span>
+                            </span>
                         </div>
+
+                        <!-- Live sample map -->
+                        <div class="dash-truck-wrap">
+                            <div class="truck-diagram">
+                                <div class="truck-body" id="liveTruckBody">
+                                    <div class="truck-shallow"><span>SHALLOW<br>AREA</span></div>
+                                    <div class="truck-body-label">TRUCK BODY</div>
+                                </div>
+                                <div class="truck-cabin">
+                                    <span class="truck-cabin-label">CABIN</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Camera feeds -->
+                        <div class="dash-cams">
+                            <div class="dash-cam-col">
+                                <div class="video-box" id="camera-slot-2"></div>
+                                <div class="video-box" id="camera-slot-1"></div>
+                            </div>
+                            <div class="dash-cam-main">
+                                <div class="video-box-lg" id="camera-slot-3"></div>
+                            </div>
+                        </div>
+
                     </div>
-                    <div class="col-md-2 text-end d-flex flex-column gap-2">
+
+                    <!-- ══════════ RIGHT RAIL ══════════ -->
+                    <div class="col-md-3 dash-rail gap-2">
+
+                        <!-- Controls -->
                         <button class="btn btn-warning fw-semibold w-100 dashboard-ctrl-btn"
                                 id="printCurrentBtn"
                                 onclick="printCurrentVehicle()"
@@ -60,24 +98,78 @@
                                 disabled>
                             <i class="fas fa-redo"></i> Retake Failed Cycle
                         </button>
+
+                        <!-- STATUS -->
+                        <div class="alert alert-info" id="statusPanel">
+                            <div class="d-flex align-items-center gap-2">
+                                <span id="currentState" class="badge bg-primary">IDLE</span>
+                                <span id="statusMode" class="badge bg-secondary ms-auto">AUTO</span>
+                            </div>
+                            <div id="statusHeadline" class="fw-bold mt-1" style="font-size:0.95rem;">
+                                Waiting for a vehicle
+                            </div>
+                        </div>
+
+                        <!-- INFO -->
+                        <div class="dash-info">
+                            <div id="statusDetail" class="text-dark mb-2">
+                                The RFID reader is armed. Nothing is being sampled right now.
+                            </div>
+
+                            <div class="dash-info-row">
+                                <span class="text-muted">Bucket</span>
+                                <span id="statusBucket">&mdash;</span>
+                            </div>
+                            <div class="dash-info-row">
+                                <span class="text-muted">Session</span>
+                                <span id="statusUid">&mdash;</span>
+                            </div>
+                            <div class="dash-info-row">
+                                <span class="text-muted">Elapsed</span>
+                                <span id="statusElapsed">00:00</span>
+                            </div>
+                            <div class="dash-info-row">
+                                <span class="text-muted">Progress</span>
+                                <span id="statusCounters">&mdash;</span>
+                            </div>
+
+                            <div class="progress mt-2" style="height:12px;">
+                                <div class="progress-bar" id="statusProgress"
+                                     role="progressbar" style="width:0%"></div>
+                            </div>
+                        </div>
+
+                        <!-- STATS -->
+                        <div class="dash-stats" id="dashStats">
+
+                            <div class="stat-tile stat-arrived" id="statArrivedTile">
+                                <div>
+                                    <div class="stat-label">VEHICLES ARRIVED TODAY</div>
+                                    <div class="stat-sub" id="statArrivedSub">yesterday &mdash;</div>
+                                </div>
+                                <div class="stat-value" id="statArrived">&mdash;</div>
+                            </div>
+
+                            <div class="stat-tile stat-scanned" id="statScannedTile">
+                                <div>
+                                    <div class="stat-label">SCANNED SUCCESSFULLY</div>
+                                    <div class="stat-sub" id="statScannedSub">avg &mdash; · yesterday &mdash;</div>
+                                </div>
+                                <div class="stat-value" id="statScanned">&mdash;</div>
+                            </div>
+
+                            <div class="stat-tile stat-failed" id="statFailedTile">
+                                <div>
+                                    <div class="stat-label">FAILED</div>
+                                    <div class="stat-sub" id="statFailedSub">yesterday &mdash;</div>
+                                </div>
+                                <div class="stat-value" id="statFailed">&mdash;</div>
+                            </div>
+
+                        </div>
+
                     </div>
                 </div>
-
-                <!-- Images Row -->
-                <div class="row g-2 mb-3">
-                    <div class="col-md-4 text-center">
-                        <div class="text-center border border-3 rounded video-box" id="camera-slot-2">
-                        </div>
-                        <div class="text-center border border-3 rounded video-box" id="camera-slot-1">
-                        </div>
-                    </div>
-            
-                    <div class="col-md-8 text-center">
-                        <div class="text-center border border-3 rounded video-box-lg" id="camera-slot-3">
-                        </div>
-                    </div>
-                </div>
-
             </div>
         </div>
     </div>
@@ -140,15 +232,14 @@
                         <thead class="table-dark">
                             <tr>
                                 <th>SNo.</th>
-                                <th>DATETIME</th>
+                                <th>CYCLE START</th>
+                                <th>CYCLE END</th>
+                                <th>CYCLE TIME<small>(MM:SS)</small></th>
                                 <th>VEHICLE NUMBER</th>
                                 <th>VENDOR NAME</th>
                                 <th>VENDOR CODE</th>
                                 <th>BUCKET</th>
                                 <th>VIEW VEHICLE IMAGE</th>
-                                <th>SAMPLE IMAGE 1</th>
-                                <th>SAMPLE IMAGE 2</th>
-                                <th>SAMPLE IMAGE 3</th>
                                 <th>SAMPLE MAP</th>
                                 <th>REPORT</th>
                                 <th>PRINT</th>
@@ -651,53 +742,68 @@
 </div>
  
  
-<!-- Sample Map — where samples were taken / attempted  (REPLACES the earlier one) -->
+<!-- Sample Map — where samples were taken / attempted -->
 <div class="modal fade" id="sampleMapModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-xl">
         <div class="modal-content">
-            <div class="modal-header bg-dark text-white">
+
+            <div class="modal-header bg-dark text-white py-2">
                 <h5 class="modal-title fw-bold" id="sampleMapTitle">Sample Map</h5>
                 <button type="button" class="btn-close btn-close-white"
                         data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
- 
+
             <div class="modal-body">
- 
-                <!-- Truck diagram: body + cabin (head) -->
+
+                <!-- Truck diagram: shallow nose + body + cabin (head) -->
                 <div class="truck-diagram">
                     <div class="truck-body" id="sampleMapBody">
+                        <div class="truck-shallow"><span>SHALLOW<br>AREA</span></div>
                         <div class="truck-body-label">TRUCK BODY</div>
                     </div>
                     <div class="truck-cabin">
                         <span class="truck-cabin-label">HEAD</span>
                     </div>
                 </div>
- 
+
                 <!-- Legend -->
-                <div class="d-flex justify-content-center flex-wrap gap-4 mt-3 small">
+                <div class="d-flex justify-content-center flex-wrap gap-4 mt-2 small">
                     <span><span class="sample-dot-legend legend-ok"></span> Sample collected</span>
                     <span><span class="sample-dot-legend legend-fail"></span> Failed attempt</span>
                     <span><span class="sample-dot-legend legend-hard"></span> Hard material</span>
+                    <span class="text-muted"><i class="fas fa-hand-pointer"></i> Click a dot to view its image</span>
                 </div>
- 
-                <!-- Dot / row pagination (shown only when there are more than 8 attempts) -->
-                <div id="sampleMapPager"
-                     class="d-flex justify-content-between align-items-center mt-3 d-none">
-                    <span class="text-muted small" id="sampleMapRange"></span>
-                    <div class="btn-group btn-group-sm">
-                        <button class="btn btn-outline-dark" id="sampleMapPrev"
-                                onclick="sampleMapPage(-1)">&laquo; Prev</button>
-                        <button class="btn btn-outline-dark" id="sampleMapNext"
-                                onclick="sampleMapPage(1)">Next &raquo;</button>
-                    </div>
+
+                <!-- Counters + collection mode -->
+                <div class="d-flex justify-content-between align-items-center mt-2"
+                     id="sampleMapBadges"></div>
+
+                <!-- Attempt list (same table template as the History tab) -->
+                <div class="table-responsive" id="sampleMapTableWrap">
+                    <table class="table table-bordered table-sm align-middle text-center sample-table mb-0"
+                           id="SAMPLEMAP_table">
+                        <thead class="table-dark">
+                            <tr>
+                                <th style="width:8%">#</th>
+                                <th style="width:10%">AREA</th>
+                                <th style="width:18%">STATUS</th>
+                                <th style="width:26%">REASON</th>
+                                <th style="width:24%">TIME</th>
+                                <th style="width:14%">IMAGE</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sampleMapRows"></tbody>
+                    </table>
                 </div>
- 
-                <!-- Summary + attempt list -->
-                <div id="sampleMapSummary" class="mt-3"></div>
- 
+
+                <!-- Same pagination template as History / Vehicle Master -->
+                <div id="pagination-samplemap" class="d-flex justify-content-between mt-2 py-1"></div>
+
+                <div id="sampleMapEmpty"></div>
+
             </div>
- 
-            <div class="modal-footer">
+
+            <div class="modal-footer py-2">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
