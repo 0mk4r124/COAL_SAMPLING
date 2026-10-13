@@ -58,6 +58,23 @@ SERVICE_ENV = {
     "VEHICLE_PDF_PASSWORD": os.getenv("VEHICLE_PDF_PASSWORD"),
     "ALERT_RECIPIENTS": os.getenv("ALERT_RECIPIENTS"),
 
+    # Application
+    "VEHICLE_PDF_PASSWORD": os.getenv("VEHICLE_PDF_PASSWORD"),
+    "ALERT_RECIPIENTS": os.getenv("ALERT_RECIPIENTS"),
+
+    # ── NEW: mail recipients + per-mail switches ──────────────────────────
+    "CLIENT_RECIPIENTS": os.getenv("CLIENT_RECIPIENTS"),
+    "MAIL_NEW_VEHICLE_ENABLED": os.getenv("MAIL_NEW_VEHICLE_ENABLED"),
+    "MAIL_VENDOR_MISMATCH_ENABLED": os.getenv("MAIL_VENDOR_MISMATCH_ENABLED"),
+    "MAIL_INSPECTION_DONE_ENABLED": os.getenv("MAIL_INSPECTION_DONE_ENABLED"),
+    "MAIL_CYCLE_BLOCKED_ENABLED": os.getenv("MAIL_CYCLE_BLOCKED_ENABLED"),
+    "MAIL_TO_VENDOR_MISMATCH": os.getenv("MAIL_TO_VENDOR_MISMATCH"),
+    "MAIL_TO_INSPECTION_DONE": os.getenv("MAIL_TO_INSPECTION_DONE"),
+    "MAIL_TO_CYCLE_BLOCKED": os.getenv("MAIL_TO_CYCLE_BLOCKED"),
+    "MAIL_MAX_FAILED_IMAGES": os.getenv("MAIL_MAX_FAILED_IMAGES"),
+    "MAIL_TOTAL_ATTACH_MB": os.getenv("MAIL_TOTAL_ATTACH_MB"),
+    "MAIL_SITE_TAG": os.getenv("MAIL_SITE_TAG"),
+
     # Database
     "DB_HOST": os.getenv("DB_HOST"),
     "DB_USER": os.getenv("DB_USER"),

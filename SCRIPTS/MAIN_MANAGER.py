@@ -34,7 +34,10 @@ from fpdf import FPDF
 from DEPENDANT.MQTT import MQTT
 from DEPENDANT.LOGGING import initializeLogger
 # from DEPENDANT.EMAIL_ALERTS import send_new_vehicle_alert
-from DEPENDANT.VEHICLE_HOOKS import on_new_vehicle, resolve_pdf_url
+from DEPENDANT.VEHICLE_HOOKS import (
+    on_new_vehicle, resolve_pdf_url,
+    on_inspection_complete, on_cycle_blocked,
+)
 
 from LOGIC import (
     initialize_ai_model,
@@ -81,7 +84,7 @@ HARD_MATERIAL_CONSECUTIVE_LIMIT = 2
 HARD_DECISION_TIMEOUT = 600     # 10 minutes
 
 # ── Sample image collection (training data) ───────────────────────────────────
-SAMPLE_CAPTURE_ENABLED  = True
+SAMPLE_CAPTURE_ENABLED  = False
 SAMPLE_CAPTURE_CAMS     = ("CAM1", "CAM2", "CAM3")
 SAMPLE_CAPTURE_INTERVAL = 1.0    # seconds between saves; the background camera
                                  # threads refresh TEMP_IMG about once a second
@@ -89,7 +92,7 @@ SAMPLE_CAPTURE_MAX_SECS = 120    # hard cap — a cycle runs ~60 s, so this can
                                  # never outlive the cycle even if a stop is missed
 
 # ── Sampling geometry ─────────────────────────────────────────────────────────
-X_MIN, X_MAX = 30, 100   # X travel bounds, % of full travel
+X_MIN, X_MAX = 40, 100   # X travel bounds, % of full travel
 Y_MIN, Y_MAX = 25, 85    # Y travel bounds, % of full travel
 MIN_X_GAP    = 20        # Minimum X separation between the 3 sample points (%)
 
@@ -809,6 +812,7 @@ class Manager:
         self._sample_info      = self._new_sample_info()
         self._ai_blocked_pos   = None    # position the AI rejected (for logging)
         self._ai_block_count   = 0       # how many times the AI has blocked this session
+        self._session_pdf_url  = ""      # secured PDF/QR url resolved this session (for mail)
         # self._stop_sample_capture()
         self._capture_stop   = None
         self._capture_thread = None
@@ -1661,6 +1665,7 @@ class Manager:
             self.uid,
             vehicle_img_path=self.paths.get("VEHICLE_IMG_PATH"),
         )
+        self._session_pdf_url = pdf_url or ""   # reused by the inspection-complete mail
         dtstamp = self.uid.replace('_', '')
         self._printer(action="send_data", pdf_url=pdf_url, dtstamp=dtstamp)
         print(f"[MANAGER] Print job sent — dtstamp={dtstamp} url={'yes' if pdf_url else 'MISSING'}")
@@ -1876,6 +1881,23 @@ class Manager:
                 self._record_attempt(pos, "FAILED", "AI_OBSTRUCTION")
                 self._ai_blocked_pos = self.positions.pop()   # discard this point
                 self._ai_block_count += 1
+
+                # Mail the block with the frozen camera frames of the failed
+                # cycles. Fire-and-forget on its own thread — never blocks.
+                try:
+                    on_cycle_blocked(
+                        uid=self.uid,
+                        vehicle=self.vehicle,
+                        reason="AI_OBSTRUCTION",
+                        position=self._ai_blocked_pos,
+                        attempt_no=self._ai_block_count,
+                        waiting_for_operator=True,
+                        sample_info=self._sample_info,
+                        rfids=self.rfids,
+                        bucket_no=self.bucket_no,
+                    )
+                except Exception:
+                    logger.error(f"{traceback.format_exc()}")
  
                 print("[MANAGER] AI BLOCKED — waiting for operator decision")
                 logger.warning(f"AI blocked at {self._ai_blocked_pos} — waiting for operator decision")
@@ -2043,6 +2065,25 @@ class Manager:
                   f"(consecutive {self._consecutive_hard}/{HARD_MATERIAL_CONSECUTIVE_LIMIT})")
             logger.warning(f"Hard material at {bad} — consecutive "
                            f"{self._consecutive_hard}/{HARD_MATERIAL_CONSECUTIVE_LIMIT}")
+
+            # Mail the hard-material hit with the frozen camera frames.
+            try:
+                on_cycle_blocked(
+                    uid=self.uid,
+                    vehicle=self.vehicle,
+                    reason="HARD_MATERIAL",
+                    position=bad,
+                    attempt_no=self._hard_retries,
+                    consecutive=self._consecutive_hard,
+                    waiting_for_operator=(
+                        self._consecutive_hard >= HARD_MATERIAL_CONSECUTIVE_LIMIT
+                    ),
+                    sample_info=self._sample_info,
+                    rfids=self.rfids,
+                    bucket_no=self.bucket_no,
+                )
+            except Exception:
+                logger.error(f"{traceback.format_exc()}")
  
             # ── Two in a row: stop probing, hand over to the operator ────────
             if self._consecutive_hard >= HARD_MATERIAL_CONSECUTIVE_LIMIT:
@@ -2233,6 +2274,25 @@ class Manager:
         except Exception as e: 
             print(f"[MANAGER] Error (generate_sampling_report) - {e}")
             logger.error(f"{traceback.format_exc()}")
+
+        # ── Inspection finished: mail the report PDF + vehicle info ──────────
+        # Threaded and deduped per UID inside the hook; a mail failure here
+        # cannot stop the session being closed out below.
+        try:
+            self._mark_cycle_end()          # so the mail carries the real end time
+            on_inspection_complete(
+                uid=self.uid,
+                vehicle=self.vehicle,
+                rfids=self.rfids,
+                bucket_no=self.bucket_no,
+                report_pdf_path=self.paths.get("REPORT_PATH"),
+                pdf_url=getattr(self, "_session_pdf_url", "") or None,
+                sample_info=self._sample_info,
+            )
+        except Exception:
+            logger.error(f"{traceback.format_exc()}")
+
+        db_complete_log(self.uid)
  
         db_complete_log(self.uid)
         time.sleep(5)
