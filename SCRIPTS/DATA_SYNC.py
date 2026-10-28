@@ -18,8 +18,8 @@ DB_CONFIG = {
     "database": "COAL_SAMPLING_DHAR"
 }
 
-DATA_API_URL = "https://www.insightzz-analytics.com/Ultratech//DharCoalAjaxReqController?apiName=syncDharCoalDataTable"
-UPTIME_API_URL = "https://www.insightzz-analytics.com/Ultratech//DharCoalAjaxReqController?apiName=syncUptimeHealthStatus"
+DATA_API_URL = "https://insightzz-analytics.com:8082/api/coalsampling/data-sync"
+UPTIME_API_URL = "https://insightzz-analytics.com:8082/api/coalsampling/{location}/uptime-sync".format(location="Dhar")
 BASE_FILE_PATH = os.environ.get('BASE_FILE_PATH', 'C:/Users/COAL_SAMPLING_1/PRODUCTION_CODE/COAL_SAMPLING/')
 
 SYNC_INTERVAL = 600  # 10 minutes
@@ -35,20 +35,6 @@ def get_db():
 
 # -------- FETCH DATA (MATCHES DJANGO LOGIC) --------
 def fetch_unsynced_rows(limit=BATCH_SIZE):
-    # rows = [{
-    #     "uid": "uid1223",
-    #     "rfids": "rfids3434",
-    #     "vehicle_number": "vehicle_number32342",
-    #     "create_time": "create_time234234",
-    #     "vendor_name": "vendor_name234234",
-    #     "vendor_code": "vendor_code234234",
-
-    #     "vehicle_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
-    #     "sample_1_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
-    #     "sample_2_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
-    #     "sample_3_img_path": "/home/omkar/Documents/logout_3_20250702_103147.jpg",
-    #     "report_path": "/home/omkar/Downloads/Project_Timeline_MOM.pdf",
-    # }]
     db = get_db()
     cur = db.cursor()
 
@@ -58,13 +44,13 @@ def fetch_unsynced_rows(limit=BATCH_SIZE):
            vm.vendor_code,
            vdm.vender_name
     FROM VEHICLE_LOGS vl
-    LEFT JOIN VEHICLE_MASTER vm 
+    LEFT JOIN VEHICLE_MASTER vm
         ON vm.rfid = vl.rfids
-    LEFT JOIN VENDOR_MASTER vdm 
+    LEFT JOIN VENDOR_MASTER vdm
         ON vm.vendor_code = vdm.vendor_code
     WHERE vl.status = 'COMPLETED'
       AND (vl.is_synced = 0 OR vl.is_synced IS NULL)
-    ORDER BY vl.create_time ASC
+    ORDER BY vl.create_time DESC
     LIMIT {limit}
     """
 
@@ -118,16 +104,16 @@ def to_minutes(s):
 # -------- BUILD PAYLOAD --------
 def build_payload(row):
     return {
-        "data": {
-            "UID": row["UID"],
-            "RFIDS": row["RFIDS"],
-            "VEHICLE_NUM": row.get("vehicle_number"),
-            "DT_STAMP": str(row.get("CREATE_TIME")),
-            "VENDOR_NAME": row.get("vender_name"),
-            "VENDOR_CODE": row.get("vendor_code"),
+        "projectLocation": "Dhar",
+        "UID": row["UID"],
+        "RFIDS": row["RFIDS"],
+        "VEHICLE_NUM": row.get("vehicle_number"),
+        "CREATE_TIME": str(row.get("CREATE_TIME")),
+        "UPDATE_TIME": str(row.get("UPDATE_TIME")),
+        "VENDOR_NAME": row.get("vender_name"),
+        "VENDOR_CODE": row.get("vendor_code"),
 
-            "REPORT_PATH": encode_file(row.get("REPORT_PATH"))
-        }
+        "ReportBase64": encode_file(row.get("REPORT_PATH"))
     }
 
 def build_payload_uptime():
@@ -157,14 +143,16 @@ def build_payload_uptime():
                 stats[dtype]["online"] += 1
 
     payload = {
-        "conveyorList": [{
-            "ID": int(time.time()),  # epoch
-            "CAMERA1_UPTIME": to_minutes(stats.get("CAMERA", {"total": 0, "online": 0})),
-            "PLC_UPTIME": to_minutes(stats.get("PLC", {"total": 0, "online": 0})),
-            "SERVER_UPTIME": to_minutes(stats.get("SERVER", {"total": 0, "online": 0})),
-            "INTERNET_UPTIME": to_minutes(stats.get("INTERNET", {"total": 0, "online": 0})),
-            "CURRENT_DATETTIME": (datetime.now() - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"),
-        }]
+        "UPTIME_TABLE": [
+            {
+                "ID": int(time.time()),
+                "CAMERA1_UPTIME": to_minutes(stats.get("CAMERA1", {"total": 0, "online": 0})),
+                "PLC_UPTIME": to_minutes(stats.get("PLC", {"total": 0, "online": 0})),
+                "SERVER_UPTIME": to_minutes(stats.get("SERVER", {"total": 0, "online": 0})),
+                "INTERNET_UPTIME": to_minutes(stats.get("INTERNET", {"total": 0, "online": 0})),
+                "CURRENT_DATETTIME": (datetime.now() - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        ]
     }
 
     return payload
@@ -204,6 +192,11 @@ def run_sync():
                 for row in rows:
                     payload = build_payload(row)
 
+                    # Report not ready yet -> leave unsynced, retry next cycle
+                    if not payload["ReportBase64"]:
+                        print(f"[SYNC] Report not ready, will retry UID: {row['UID']}")
+                        continue
+
                     success = send_to_server(payload)
 
                     if success:
@@ -226,7 +219,7 @@ def run_uptime_sync():
     while True:
         now = datetime.now()
 
-        if now.hour == 0 and now.minute == 20:
+        if now.hour == 0 and now.minute == 15:
             if last_run_date != now.date():
                 print("[SYNC] Running uptime sync...")
 
