@@ -23,14 +23,32 @@ What changed (nothing existing was removed):
   * send_cycle_blocked_alert   - NEW. AI-obstruction / hard-material alert
                               with the frozen camera images of the failed
                               cycles attached
+  * send_vehicle_summary_mail  - NEW (Oct 2026). The ONE mail per vehicle,
+                              sent when the session closes. Replaces the
+                              per-event vendor-mismatch / AI-block / hard-
+                              material mails and the inspection-complete mail:
+                                - vendor mismatch + the vehicle's history table
+                                - every AI block / hard-material hit with 3
+                                  pictures: CAM3 snapshot, CAM1, CAM1_vis
+                                - attempt log + compressed report PDF
+                              AI-block / hard-material alerts (send_cycle_
+                              blocked_alert) still go out as they happen.
 """
 
 import os
+import re
+import shutil
+import tempfile
 import logging
 import traceback
 from datetime import datetime
 
 from DEPENDANT.AZURE_SERVICE import azure_send_mail, azure_upload_file
+from DEPENDANT.REPORT_UTILS import (
+    summarize_session, remark_parts, find_vendor_mismatch, vendor_table,
+    vendor_table_html, html_table, prepare_image, esc, fmt_dt, fmt_duration,
+    cycle_window, REASON_TEXT, HTML_FONT,
+)
 from DEPENDANT.MAIL_RECIPIENTS import (
     recipients_for, is_enabled,
     KIND_NEW_VEHICLE, KIND_VENDOR_MISMATCH, KIND_INSPECTION_DONE,
@@ -282,6 +300,32 @@ def failed_attempt_images(sample_info: dict | None,
     return images
 
 
+def block_attempt_images(sample_info: dict | None, reason: str | None = None) -> list[tuple[str, str]]:
+    """
+    The 3 pictures of the most recent failed attempt (optionally of `reason`):
+        CAM3 snapshot, CAM1 frame the model ran on, CAM1 _vis (annotated)
+    Returns [(label, path), ...] - only files that exist.
+    MAIN_MANAGER._freeze_ai_images() records the CAM1 pair on the attempt.
+    """
+    for a in reversed(_attempts(sample_info)):
+        if a.get("status") == "SUCCESS":
+            continue
+        if reason and a.get("reason") != reason:
+            continue
+        out = []
+        if a.get("image"):
+            out.append(("CAM3", a["image"]))
+        pairs = a.get("ai_images") if isinstance(a.get("ai_images"), list) else []
+        if pairs:
+            p = pairs[-1]
+            if p.get("raw"):
+                out.append(("CAM1", p["raw"]))
+            if p.get("vis"):
+                out.append(("CAM1_vis", p["vis"]))
+        return [(lbl, path) for lbl, path in out if path and os.path.exists(path)]
+    return []
+
+
 def attempts_table(sample_info: dict | None) -> str:
     """Plain-text attempt log for the mail body."""
     rows = _attempts(sample_info)
@@ -482,18 +526,45 @@ def send_cycle_blocked_alert(uid: str,
                              rfids: list[str] | None = None,
                              bucket_no: int | None = None) -> bool:
     """
-    A cycle was rejected by the AI check or by hard material.
+    A cycle was rejected by the AI check or by hard material. Sent the moment
+    it happens.
 
-    The frozen camera frames of the failed cycles are attached - explicit
-    `image_paths` if the caller has them, otherwise every failed-attempt image
-    recorded in sample_info (most recent MAIL_MAX_FAILED_IMAGES).
+    Attaches 3 pictures of THIS block (explicit `image_paths` override it):
+      <uid>_<reason><n>_CAM3.jpg      auger-view snapshot at the block
+      <uid>_<reason><n>_CAM1.jpg      CAM1 frame the AI check ran on
+      <uid>_<reason><n>_CAM1_vis.jpg  same frame, annotated (yellow ROI,
+                                      detections, verdict)
+    For hard material the CAM1 pair is the check that cleared the point
+    before the cycle started.
     """
     reason = (reason or "FAILED").upper()
     info   = sample_info if isinstance(sample_info, dict) else {}
 
-    images = list(image_paths or [])
-    if not images:
-        images = failed_attempt_images(info)
+    tmp_dir = tempfile.mkdtemp(prefix=f"block_{uid}_")
+    try:
+        return _send_cycle_blocked_alert(tmp_dir, uid, vehicle_no, vendor, reason, info,
+                                         position, attempt_no, consecutive,
+                                         waiting_for_operator, image_paths,
+                                         vendor_code, rfids, bucket_no)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _send_cycle_blocked_alert(tmp_dir, uid, vehicle_no, vendor, reason, info,
+                              position, attempt_no, consecutive,
+                              waiting_for_operator, image_paths,
+                              vendor_code, rfids, bucket_no) -> bool:
+    if image_paths:
+        images = list(image_paths)
+    else:
+        tag = {"AI_OBSTRUCTION": "AIblock", "HARD_MATERIAL": "HardMaterial"}.get(
+            reason, reason.title().replace("_", ""))
+        n = attempt_no if attempt_no is not None else ""
+        images = []
+        for label, src in block_attempt_images(info, reason):
+            staged = prepare_image(src, tmp_dir, name=f"{uid}_{tag}{n}_{label}.jpg")
+            if staged:
+                images.append(staged)
     kept, skipped = _fit_attachments(images, max_files=MAIL_MAX_FAILED_IMAGES)
 
     pos_line = "-"
@@ -513,10 +584,11 @@ def send_cycle_blocked_alert(uid: str,
     detail_lines.append(f"  Failed attempts   : {info.get('failed', '-')}")
 
     if kept:
-        img_note = (f"{len(kept)} camera image(s) of the failed cycle(s) attached:\n"
+        img_note = (f"{len(kept)} camera image(s) of this block attached "
+                    "(CAM3 = auger view, CAM1 = AI input, CAM1_vis = AI verdict):\n"
                     + "\n".join(f"  {os.path.basename(p)}" for p in kept))
     else:
-        img_note = "No camera image was available for the failed cycle(s)."
+        img_note = "No camera image was available for this block."
 
     if skipped:
         img_note += ("\n\nThese images did not fit in the mail and are on the sampling PC:\n"
@@ -543,3 +615,325 @@ def send_cycle_blocked_alert(uid: str,
         attachments=kept or None,
         kind=KIND_CYCLE_BLOCKED,
     )
+
+# =====================================================================
+# NEW (Oct 2026): ONE SUMMARY MAIL PER VEHICLE
+# =====================================================================
+
+# Graph rejects an oversized sendMail outright, so this mail budgets every
+# byte it attaches (report PDF + inline pictures + raw CAM1 frames). Images
+# are resized first (REPORT_UTILS.prepare_image) so ~25-30 fit. If Graph
+# still refuses, the mail is re-sent without pictures rather than lost.
+MAIL_SUMMARY_ATTACH_MB   = float(os.getenv("MAIL_SUMMARY_ATTACH_MB", "3"))
+MAIL_MAX_SUMMARY_IMAGES  = int(os.getenv("MAIL_MAX_SUMMARY_IMAGES", "30"))
+
+
+def _summary_recipients(has_mismatch: bool, has_block: bool) -> list[str]:
+    """
+    The summary replaces three mails, so it goes to everyone who would have
+    received any of them (each list still honours its own on/off switch).
+    """
+    kinds = [KIND_INSPECTION_DONE]
+    if has_mismatch:
+        kinds.append(KIND_VENDOR_MISMATCH)
+    if has_block:
+        kinds.append(KIND_CYCLE_BLOCKED)
+
+    out: list[str] = []
+    for kind in kinds:
+        try:
+            if not is_enabled(kind):
+                continue
+            for r in recipients_for(kind) or []:
+                if r and r.lower() not in {x.lower() for x in out}:
+                    out.append(r)
+        except Exception:
+            logger.error(f"[ALERT] Recipient lookup failed for {kind}:\n{traceback.format_exc()}")
+    return out
+
+
+class _MailBudget:
+    """Running byte budget for one message."""
+
+    def __init__(self, limit_mb: float, max_images: int):
+        self.left       = limit_mb * 1024 * 1024
+        self.images     = 0
+        self.max_images = max_images
+        self.dropped: list[str] = []
+
+    def take(self, path: str | None, is_image: bool = True) -> bool:
+        if not path or not os.path.exists(path):
+            return False
+        size = os.path.getsize(path)
+        if size > self.left or (is_image and self.images >= self.max_images):
+            self.dropped.append(os.path.basename(path))
+            return False
+        self.left -= size
+        if is_image:
+            self.images += 1
+        return True
+
+
+def _kv_table(rows: list[tuple]) -> str:
+    cells = "".join(
+        f'<tr><td style="padding:3px 10px 3px 0;color:#6c757d;white-space:nowrap;">{esc(k)}</td>'
+        f'<td style="padding:3px 0;font-weight:600;">{esc(v)}</td></tr>'
+        for k, v in rows
+    )
+    return f'<table cellspacing="0" cellpadding="0" style="margin:4px 0 10px 0;">{cells}</table>'
+
+
+def _figure(cid: str, caption: str) -> str:
+    return (
+        '<div style="display:inline-block;vertical-align:top;margin:0 8px 8px 0;'
+        'width:300px;">'
+        f'<img src="cid:{cid}" width="300" style="width:300px;border:1px solid #ced4da;'
+        'display:block;" alt="">'
+        f'<div style="font-size:11px;color:#495057;margin-top:2px;">{esc(caption)}</div>'
+        '</div>'
+    )
+
+
+def _section(title: str, colour: str, inner: str) -> str:
+    return (
+        f'<div style="margin:14px 0 4px 0;padding:6px 10px;background:{colour};'
+        f'color:#fff;font-weight:700;font-size:13px;">{esc(title)}</div>{inner}'
+    )
+
+
+def _pos_text(a: dict) -> str:
+    return f"Area {a.get('area', '-')}  (x={a.get('x', '-')}, y={a.get('y', '-')})"
+
+
+def send_vehicle_summary_mail(uid: str,
+                              vehicle_no: str,
+                              vendor: str,
+                              vendor_code: str | None = None,
+                              rfid: str | None = None,
+                              rfids: list[str] | None = None,
+                              bucket_no=None,
+                              report_pdf_path: str | None = None,
+                              sample_info: dict | None = None,
+                              session_status: str = "COMPLETED",
+                              error_message: str | None = None,
+                              only_if_issues: bool = False) -> bool:
+    """
+    The single end-of-session mail for one vehicle.
+
+    Always carries: vehicle details, cycle times, sampling summary, attempt
+    log and the compressed report PDF. Adds a section for each issue found:
+
+      VENDOR MISMATCH : only when the vendor really differs - vendor on
+                        record vs vendor now, plus one row per unique vendor
+                        this vehicle number has been seen with
+      AI BLOCK        : per block - CAM3 snapshot, CAM1 frame of the deciding
+                        AI check and its _vis copy (3 pictures)
+      HARD MATERIAL   : per hit - CAM3 snapshot, CAM1 + CAM1_vis of the AI
+                        check that cleared the point
+
+    only_if_issues : skip the mail when the session had none of the three
+                     issues (used for sessions that end without a report).
+
+    Never raises. Returns True when Graph accepted the mail.
+    """
+    tmp_dir = None
+    try:
+        info = sample_info if isinstance(sample_info, dict) else {}
+        summary  = summarize_session(info, session_status, error_message)
+        mismatch = find_vendor_mismatch(vehicle_no, vendor_code, rfid)
+        # One row per unique vendor of this vehicle number (only built when
+        # the vendor really is mismatched)
+        history  = (vendor_table(vehicle_no, mismatch, vendor_code, vendor, include_uid=uid)
+                    if mismatch else [])
+
+        issues: list[str] = []
+        if mismatch:
+            issues.append("Vendor mismatch")
+        if summary["ai"]:
+            issues.append(f"AI block x{len(summary['ai'])}")
+        if summary["hard"]:
+            issues.append(f"Hard material x{len(summary['hard'])}")
+
+        if only_if_issues and not issues:
+            logger.info(f"[ALERT] Session {uid} closed without issues - no summary mail")
+            return False
+
+        recipients = _summary_recipients(bool(mismatch), bool(summary["ai"] or summary["hard"]))
+        if not recipients:
+            logger.info(f"[ALERT] Summary mail for {uid}: no enabled recipient list - not sent")
+            return False
+
+        tmp_dir = tempfile.mkdtemp(prefix=f"mail_{uid}_")
+        budget  = _MailBudget(MAIL_SUMMARY_ATTACH_MB, MAIL_MAX_SUMMARY_IMAGES)
+        attachments: list[str] = []
+        inline: dict[str, str] = {}
+
+        # ── Report PDF first: it is the one thing every mail must carry ──────
+        report_path = resolve_report_pdf(report_pdf_path)
+        if report_path and budget.take(report_path, is_image=False):
+            attachments.append(report_path)
+            report_note = f"Sampling report attached: {os.path.basename(report_path)}"
+        elif report_path:
+            report_note = f"Sampling report too large to attach - on the sampling PC at {report_path}"
+        else:
+            report_note = "Sampling report: not available for this session."
+
+        def _inline(src: str | None, cid: str) -> bool:
+            staged = prepare_image(src, tmp_dir, name=f"{cid}.jpg")
+            if staged and budget.take(staged):
+                inline[cid] = staged
+                return True
+            return False
+
+        # ── Header ───────────────────────────────────────────────────────────
+        start, end = cycle_window(info.get("started"), None, info)
+        if not info.get("cycle_ended"):
+            end = None
+        rfid_str = rfids if isinstance(rfids, str) else " | ".join(rfids or [])
+        status_word = summary["cycle_status"]
+        if summary["status"] in ("ERROR", "FAILED"):
+            status_word = "Ended with error"
+
+        banner_colour = "#198754" if not issues else "#dc3545"
+        banner_text = ("No issues" if not issues else "Issues: " + ", ".join(issues))
+
+        parts = [
+            f'<div style="{HTML_FONT}">',
+            f'<div style="padding:10px 12px;background:{banner_colour};color:#fff;">'
+            f'<div style="font-size:16px;font-weight:700;">{esc(vehicle_no)} - {esc(status_word)}</div>'
+            f'<div style="font-size:13px;">{esc(banner_text)}</div></div>',
+            _kv_table([
+                ("Vehicle Number", vehicle_no or "-"),
+                ("Vendor",         vendor or "-"),
+                ("Vendor Code",    vendor_code or "-"),
+                ("Bucket",         bucket_no if bucket_no is not None else "-"),
+                ("RFID(s)",        rfid_str or "-"),
+                ("Session UID",    uid or "-"),
+                ("Cycle Start",    start.strftime("%Y-%m-%d %H:%M:%S") if start else "-"),
+                ("Cycle End",      end.strftime("%Y-%m-%d %H:%M:%S") if end else "-"),
+                ("Cycle Time",     fmt_duration(start, end) or "-"),
+                ("Collection",     "MANUAL" if summary["manual"] else "AUTO"),
+                ("Samples",        f"{summary['successful']} / {summary['total']} successful, "
+                                   f"{summary['failed']} failed attempt(s)"),
+            ]),
+        ]
+
+        remarks = remark_parts(summary, mismatch)
+        if remarks:
+            parts.append('<div style="margin:0 0 6px 0;"><b>Remark:</b> '
+                         + esc("; ".join(remarks)) + "</div>")
+
+        # ── Vendor mismatch ─────────────────────────────────────────────────
+        if mismatch:
+            rec = ", ".join(f"{o['vendor_name']} ({o['vendor_code']})" for o in mismatch["on_record"])
+            inner = _kv_table([
+                ("Vendor on record", rec),
+                ("Arrived as",       f"{vendor or '-'} ({vendor_code or '-'})"),
+            ])
+            inner += ('<div style="margin:2px 0;">Every vendor this vehicle number has been '
+                      'registered or sampled under:</div>')
+            inner += vendor_table_html(history)
+            parts.append(_section("VENDOR MISMATCH", "#fd7e14", inner))
+
+        # ── AI blocks / hard material: 3 pictures per event ─────────────────
+        def _three_figs(a: dict, prefix: str, cam1_caption: str) -> str:
+            """CAM3 snapshot + CAM1 frame + CAM1 _vis, inline."""
+            figs = []
+            seq = a.get("seq", "x")
+            if _inline(a.get("image"), f"{prefix}{seq}_cam3"):
+                figs.append(_figure(f"{prefix}{seq}_cam3", "CAM3 - auger view"))
+            pairs = a.get("ai_images") if isinstance(a.get("ai_images"), list) else []
+            pair = pairs[-1] if pairs else {}
+            if _inline(pair.get("raw"), f"{prefix}{seq}_cam1raw"):
+                figs.append(_figure(f"{prefix}{seq}_cam1raw", f"CAM1 - {cam1_caption} (model input)"))
+            if _inline(pair.get("vis"), f"{prefix}{seq}_cam1vis"):
+                figs.append(_figure(f"{prefix}{seq}_cam1vis", f"CAM1_vis - {cam1_caption} (verdict)"))
+            if not pair:
+                figs.append('<div style="font-size:11px;color:#6c757d;margin:4px 0;">'
+                            'CAM1 frames were not recorded for this event.</div>')
+            return "".join(figs)
+
+        if summary["ai"]:
+            inner = ('<div style="margin:4px 0;color:#495057;">The model could not confirm the '
+                     'auger was over coal. Per block: CAM3 auger view, the CAM1 frame of the '
+                     'deciding AI check, and its _vis copy (yellow box = region judged, '
+                     'boxes = detections, verdict top-left).</div>')
+            for i, a in enumerate(summary["ai"], start=1):
+                inner += (f'<div style="margin:8px 0 2px 0;font-weight:700;">AI block {i} - '
+                          f'{esc(_pos_text(a))} at {esc(fmt_dt(a.get("time"), "%H:%M:%S"))}</div>'
+                          + _three_figs(a, "ai", "failed AI check"))
+            parts.append(_section(f"AI BLOCK ({len(summary['ai'])})", "#0d6efd", inner))
+
+        if summary["hard"]:
+            inner = ('<div style="margin:4px 0;color:#495057;">The PLC reported hard material, '
+                     'so these cycles were not counted. Two in a row stops automatic probing and '
+                     'hands over to the operator for manual collection. CAM1 shows the AI check '
+                     'that cleared the point before the cycle.</div>')
+            for i, a in enumerate(summary["hard"], start=1):
+                inner += (f'<div style="margin:8px 0 2px 0;font-weight:700;">Hard material {i} - '
+                          f'{esc(_pos_text(a))} at {esc(fmt_dt(a.get("time"), "%H:%M:%S"))}</div>'
+                          + _three_figs(a, "hm", "AI check before the cycle"))
+            parts.append(_section(f"HARD MATERIAL ({len(summary['hard'])})", "#6f42c1", inner))
+
+        # ── Other failures ──────────────────────────────────────────────────
+        if summary["other"]:
+            lines = "".join(
+                f"<li>{esc(REASON_TEXT.get(a.get('reason'), a.get('reason') or 'FAILED'))} - "
+                f"{esc(_pos_text(a))} at {esc(fmt_dt(a.get('time'), '%H:%M:%S'))}</li>"
+                for a in summary["other"]
+            )
+            parts.append(_section("OTHER FAILED ATTEMPTS", "#6c757d", f"<ul>{lines}</ul>"))
+
+        if summary["status"] in ("ERROR", "FAILED") and error_message:
+            parts.append(_section("SESSION ERROR", "#dc3545",
+                                  f"<div style='margin:4px 0;'>{esc(error_message)}</div>"))
+
+        # ── Attempt log ─────────────────────────────────────────────────────
+        attempts = info.get("attempts") if isinstance(info.get("attempts"), list) else []
+        if attempts:
+            log_rows = [[a.get("seq", "-"), a.get("cycle", "-"), a.get("area", "-"),
+                         a.get("x", "-"), a.get("y", "-"), a.get("status", "-"),
+                         a.get("reason") or "-", fmt_dt(a.get("time"), "%H:%M:%S")]
+                        for a in attempts if isinstance(a, dict)]
+            styles = ["" if r[5] == "SUCCESS" else "background:#f8d7da;" for r in log_rows]
+            parts.append('<div style="margin:14px 0 2px 0;font-weight:700;">Attempt log</div>')
+            parts.append(html_table(["#", "Cycle", "Area", "X", "Y", "Result", "Reason", "Time"],
+                                    log_rows, styles))
+
+        parts.append(f'<div style="margin:8px 0;">{esc(report_note)}</div>')
+        if budget.dropped:
+            parts.append('<div style="margin:4px 0;color:#842029;font-size:12px;">'
+                         f'{len(budget.dropped)} image(s) left out to stay under the mail size limit; '
+                         f'they are in RESULT\\...\\{esc(uid)}\\ATTEMPTS on the sampling PC.</div>')
+        parts.append('<div style="margin-top:14px;font-size:11px;color:#6c757d;">'
+                     f'Automated mail from {esc(SITE_TAG)} - '
+                     f'{datetime.now().strftime("%d/%m/%Y %H:%M:%S")}</div></div>')
+
+        body = "".join(p for p in parts if p)
+        subject = (f"[{SITE_TAG}] {vehicle_no or '-'} - {status_word} | "
+                   + (", ".join(issues) if issues else "No issues"))
+
+        # ── Send, degrading instead of losing the mail ──────────────────────
+        try:
+            return azure_send_mail(subject, body, recipients, attachments=attachments or None,
+                                   html=True, inline_images=inline or None)
+        except Exception:
+            logger.error(f"[ALERT] Summary mail for {uid} failed with pictures - "
+                         f"retrying without them:\n{traceback.format_exc()}")
+
+        lite = re.sub(r"<img\b[^>]*>", "", body)        # images gone, layout kept
+        lite += ("<p style='color:#842029;'>Pictures were removed because the mail was "
+                 "rejected with them attached. They are in the session ATTEMPTS folder.</p>")
+        keep = [p for p in attachments if p == report_path]
+        try:
+            return azure_send_mail(subject, lite, recipients, attachments=keep or None, html=True)
+        except Exception:
+            logger.error(f"[ALERT] Summary mail for {uid} failed again:\n{traceback.format_exc()}")
+            return False
+
+    except Exception:
+        logger.error(f"[ALERT] send_vehicle_summary_mail crashed:\n{traceback.format_exc()}")
+        return False
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -28,17 +28,35 @@ Entry points:
 
   on_inspection_complete(...)                                        NEW
       Call once the sampling report PDF has been generated and the session is
-      being closed. Mails the report PDF + vehicle info to the alert and
-      client lists, in a background thread.
+      being closed. Sends the ONE summary mail for the vehicle (report PDF,
+      vehicle info, and every vendor-mismatch / AI-block / hard-material
+      issue of the session) in a background thread.
 
   on_cycle_blocked(...)                                              NEW
       Call when a cycle is rejected by the AI check or by hard material.
       Mails the details plus the frozen camera images of the failed cycles.
 
-Both new hooks are fire-and-forget and swallow every error: a mail problem
+  on_session_closed(...)                                     NEW (Oct 2026)
+      Call from MAIN_MANAGER._reset() for sessions that end WITHOUT reaching
+      COMPLETE (error, timeout). Sends the summary mail only if the session
+      had a vendor mismatch, AI block or hard-material hit.
+
+All hooks are fire-and-forget and swallow every error: a mail problem
 must never touch the state machine.
+
+MAIL POLICY (Oct 2026)
+  * AI-block and hard-material alerts still go out the moment they happen
+    (on_cycle_blocked), now with 3 pictures: the CAM3 snapshot plus the CAM1
+    frame and its _vis copy. Switched by MAIL_CYCLE_BLOCKED_ENABLED as before.
+  * Vendor mismatch is NOT mailed on arrival any more; it is reported only in
+    the end-of-session summary, and only when the vendor really differs.
+    MAIL_VENDOR_MISMATCH_IMMEDIATE=1 brings the arrival mail back.
+  * Every vehicle gets ONE end-of-session summary mail
+    (EMAIL_ALERTS.send_vehicle_summary_mail) with all of its issues.
 """
 
+import os
+import copy
 import threading
 import traceback
 import logging
@@ -48,6 +66,7 @@ import pymysql
 from DEPENDANT.EMAIL_ALERTS import (
     send_new_vehicle_alert, send_vendor_mismatch_alert,
     send_inspection_complete_mail, send_cycle_blocked_alert,
+    send_vehicle_summary_mail,
 )
 from DEPENDANT.PDF_UTILS import create_and_upload_vehicle_pdf, _db_connect
 from DEPENDANT.BLOB_NAMING import blob_url_for
@@ -68,6 +87,12 @@ _INSPECTION_LOCK = threading.Lock()
 MAX_BLOCK_ALERTS_PER_SESSION = 4
 _block_alert_counts: dict[str, int] = {}
 _BLOCK_LOCK = threading.Lock()
+
+# Vendor-mismatch mail at arrival. Off by default - the mismatch is reported
+# in the end-of-session summary mail with the vehicle's vendor table.
+MAIL_VENDOR_MISMATCH_IMMEDIATE = (
+    os.getenv("MAIL_VENDOR_MISMATCH_IMMEDIATE", "0").strip().lower() in ("1", "true", "yes", "on")
+)
 
 
 # =====================================================================
@@ -156,16 +181,19 @@ def resolve_pdf_url(vehicle: dict, uid: str, vehicle_img_path: str = None) -> st
                 f"'{other.get('VENDER_NAME')}', arrived as '{vendor_name}'. "
                 f"Reusing existing PDF."
             )
-            images = [vehicle_img_path] if vehicle_img_path else None
-            threading.Thread(
-                target=send_vendor_mismatch_alert,
-                args=(vehicle_number,
-                      other.get("VENDER_NAME") or other.get("VENDOR_CODE") or "-",
-                      vendor_name,
-                      uid),
-                kwargs={"image_paths": images},
-                daemon=True,
-            ).start()
+            # The mismatch is reported in the end-of-session summary mail
+            # (with the vehicle's history table). Immediate mail only on request.
+            if MAIL_VENDOR_MISMATCH_IMMEDIATE:
+                images = [vehicle_img_path] if vehicle_img_path else None
+                threading.Thread(
+                    target=send_vendor_mismatch_alert,
+                    args=(vehicle_number,
+                          other.get("VENDER_NAME") or other.get("VENDOR_CODE") or "-",
+                          vendor_name,
+                          uid),
+                    kwargs={"image_paths": images},
+                    daemon=True,
+                ).start()
 
             old_url = other["PDF_URL"]
             if rfid:
@@ -236,30 +264,13 @@ def on_inspection_complete(uid: str,
                 _inspection_mailed_uids.clear()
                 _inspection_mailed_uids.add(uid)
 
-        v = vehicle or {}
-        kwargs = {
-            "uid":             uid,
-            "vehicle_no":      v.get("VEHICLE_NUMBER") or "-",
-            "vendor":          v.get("VENDER_NAME") or v.get("VENDOR_CODE") or "-",
-            "vendor_code":     v.get("VENDOR_CODE"),
-            "rfids":           rfids,
-            "bucket_no":       bucket_no,
-            "report_pdf_path": report_pdf_path,
-            "pdf_url":         None,   # uploaded/secured PDF is deliberately not mailed
-            "sample_info":     sample_info,
-        }
-
-        def _run():
-            try:
-                ok = send_inspection_complete_mail(**kwargs)
-                logger.info(f"[HOOKS] Inspection-complete mail for {uid}: "
-                            f"{'sent' if ok else 'NOT sent'}")
-            except Exception:
-                logger.error(f"[HOOKS] Inspection-complete mail failed:\n"
-                             f"{traceback.format_exc()}")
-
-        threading.Thread(target=_run, name=f"InspectionMail-{uid}", daemon=True).start()
-        logger.info(f"[HOOKS] Inspection-complete mail queued for UID {uid}")
+        # The ONE mail for this vehicle: report PDF + every issue of the
+        # session (vendor mismatch history, AI blocks with CAM3 + CAM1
+        # frames, hard material). The uploaded/secured PDF is still not sent.
+        kwargs = _summary_kwargs(uid, vehicle, rfids, bucket_no, sample_info,
+                                 report_pdf_path=report_pdf_path,
+                                 session_status="COMPLETED")
+        _start_summary_thread(uid, kwargs)
 
     except Exception:
         # Bookkeeping must never break the close-out path
@@ -316,7 +327,9 @@ def on_cycle_blocked(uid: str,
             "consecutive":          consecutive,
             "waiting_for_operator": waiting_for_operator,
             "image_paths":          image_paths,
-            "sample_info":          sample_info,
+            # Frozen copy: the manager appends the next attempt while this
+            # thread runs, and the mail must show THIS block's pictures.
+            "sample_info":          copy.deepcopy(sample_info) if isinstance(sample_info, dict) else None,
             "rfids":                rfids,
             "bucket_no":            bucket_no,
         }
@@ -335,3 +348,79 @@ def on_cycle_blocked(uid: str,
 
     except Exception:
         logger.error(f"[HOOKS] on_cycle_blocked failed:\n{traceback.format_exc()}")
+
+
+# =====================================================================
+# NEW (Oct 2026): END-OF-SESSION SUMMARY MAIL
+# =====================================================================
+
+def _summary_kwargs(uid, vehicle, rfids, bucket_no, sample_info,
+                    report_pdf_path=None, session_status="COMPLETED",
+                    error_message=None, only_if_issues=False) -> dict:
+    v = vehicle or {}
+    return {
+        "uid":             uid,
+        "vehicle_no":      v.get("VEHICLE_NUMBER") or "-",
+        "vendor":          v.get("VENDER_NAME") or v.get("VENDOR_CODE") or "-",
+        "vendor_code":     v.get("VENDOR_CODE"),
+        "rfid":            v.get("RFID"),
+        "rfids":           list(rfids) if isinstance(rfids, (list, tuple)) else rfids,
+        "bucket_no":       bucket_no,
+        "report_pdf_path": report_pdf_path,
+        # The manager replaces/mutates its own dict as the next vehicle
+        # starts; the mail thread works on a frozen copy.
+        "sample_info":     copy.deepcopy(sample_info) if isinstance(sample_info, dict) else None,
+        "session_status":  session_status,
+        "error_message":   error_message,
+        "only_if_issues":  only_if_issues,
+    }
+
+
+def _start_summary_thread(uid: str, kwargs: dict) -> None:
+    def _run():
+        try:
+            ok = send_vehicle_summary_mail(**kwargs)
+            logger.info(f"[HOOKS] Summary mail for {uid}: {'sent' if ok else 'NOT sent'}")
+        except Exception:
+            logger.error(f"[HOOKS] Summary mail failed:\n{traceback.format_exc()}")
+
+    threading.Thread(target=_run, name=f"SummaryMail-{uid}", daemon=True).start()
+    logger.info(f"[HOOKS] Summary mail queued for UID {uid}")
+
+
+def on_session_closed(uid: str,
+                      vehicle: dict | None,
+                      rfids: list[str] | None = None,
+                      bucket_no: int | None = None,
+                      sample_info: dict | None = None,
+                      error_message: str | None = None) -> None:
+    """
+    Fire-and-forget. Call from MAIN_MANAGER._reset() BEFORE the session
+    fields are cleared.
+
+    A session that reached COMPLETE has already been mailed by
+    on_inspection_complete (shared per-UID dedupe), so this is a no-op for
+    it. For a session that ends any other way (error, DB wait timeout) the
+    summary mail goes out only when there is something to report: a vendor
+    mismatch, an AI block or a hard-material hit.
+    """
+    try:
+        if not uid or not vehicle:
+            return
+
+        with _INSPECTION_LOCK:
+            if uid in _inspection_mailed_uids:
+                return
+            _inspection_mailed_uids.add(uid)
+            if len(_inspection_mailed_uids) > 500:
+                _inspection_mailed_uids.clear()
+                _inspection_mailed_uids.add(uid)
+
+        kwargs = _summary_kwargs(uid, vehicle, rfids, bucket_no, sample_info,
+                                 session_status="ERROR",
+                                 error_message=error_message or "Session ended before completion",
+                                 only_if_issues=True)
+        _start_summary_thread(uid, kwargs)
+
+    except Exception:
+        logger.error(f"[HOOKS] on_session_closed failed:\n{traceback.format_exc()}")

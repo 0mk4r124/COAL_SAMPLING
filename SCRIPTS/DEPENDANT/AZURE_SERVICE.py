@@ -142,37 +142,61 @@ _CONTENT_TYPES = {
 }
 
 
+def _file_attachment(file_path: str, content_id: str | None = None,
+                     name: str | None = None) -> dict | None:
+    """One Graph fileAttachment. content_id makes it inline (<img src="cid:...">)."""
+    if not file_path or not os.path.exists(file_path):
+        logger.warning(f"[MAIL] Attachment missing, skipping: {file_path}")
+        return None
+
+    ext = os.path.splitext(file_path)[1].lower()
+    with open(file_path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("utf-8")
+
+    att = {
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        "name": name or os.path.basename(file_path),
+        "contentType": _CONTENT_TYPES.get(ext, "application/octet-stream"),
+        "contentBytes": encoded,
+    }
+    if content_id:
+        att["contentId"] = content_id
+        att["isInline"]  = True
+    return att
+
+
 def azure_send_mail(subject: str, body: str, recipients: list[str],
-                    attachments: list[str] | None = None) -> bool:
+                    attachments: list[str] | None = None,
+                    html: bool = False,
+                    inline_images: dict[str, str] | None = None) -> bool:
     """
     Send mail via Microsoft Graph. Attachments: list of local file paths.
     Returns True on success, raises on hard failure.
     NOTE: Graph inline attachments are limited to ~3 MB each; compress images
     before attaching (the alert code already uses the *_REDUCED.jpg images).
+
+    html          : send `body` as HTML instead of plain text (default False,
+                    so every existing caller behaves exactly as before)
+    inline_images : {content_id: local_path} - pictures shown INSIDE the HTML
+                    body, referenced as <img src="cid:content_id">
     """
     token = _get_token()
 
     graph_attachments = []
     for file_path in attachments or []:
-        if not file_path or not os.path.exists(file_path):
-            logger.warning(f"[MAIL] Attachment missing, skipping: {file_path}")
-            continue
+        att = _file_attachment(file_path)
+        if att:
+            graph_attachments.append(att)
 
-        ext = os.path.splitext(file_path)[1].lower()
-        with open(file_path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode("utf-8")
-
-        graph_attachments.append({
-            "@odata.type": "#microsoft.graph.fileAttachment",
-            "name": os.path.basename(file_path),
-            "contentType": _CONTENT_TYPES.get(ext, "application/octet-stream"),
-            "contentBytes": encoded,
-        })
+    for cid, file_path in (inline_images or {}).items():
+        att = _file_attachment(file_path, content_id=cid)
+        if att:
+            graph_attachments.append(att)
 
     payload = {
         "message": {
             "subject": subject,
-            "body": {"contentType": "Text", "content": body},
+            "body": {"contentType": "HTML" if html else "Text", "content": body},
             "toRecipients": [
                 {"emailAddress": {"address": mail}} for mail in recipients
             ],
@@ -190,7 +214,7 @@ def azure_send_mail(subject: str, body: str, recipients: list[str],
     resp = requests.post(url, headers=headers, json=payload, timeout=180)
 
     if resp.status_code not in (200, 202):
-        raise Exception(f"Mail send failed: {resp.text}")
+        raise Exception(f"Mail send failed ({resp.status_code}): {resp.text}")
 
     logger.info(f"[MAIL] Sent: {subject} -> {recipients}")
     return True

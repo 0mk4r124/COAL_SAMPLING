@@ -28,6 +28,7 @@ SERVICES = {
     "RFID Reader": fr"{BASE_FILE_PATH}SCRIPTS\\RFID_READER.py",
     "Health Monitor": fr"{BASE_FILE_PATH}SCRIPTS\\HEALTH_STATUS.py",
     "PDF Sync": fr"{BASE_FILE_PATH}SCRIPTS\\FILL_VEHICLES.py",
+    "Daily Report": fr"{BASE_FILE_PATH}SCRIPTS\\DAILY_REPORT.py",
     # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
     "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
@@ -74,6 +75,13 @@ SERVICE_ENV = {
     "MAIL_MAX_FAILED_IMAGES": os.getenv("MAIL_MAX_FAILED_IMAGES"),
     "MAIL_TOTAL_ATTACH_MB": os.getenv("MAIL_TOTAL_ATTACH_MB"),
     "MAIL_SITE_TAG": os.getenv("MAIL_SITE_TAG"),
+
+    # ── NEW (Oct 2026): one summary mail per vehicle + daily Insightzz CSV ─
+    "MAIL_VENDOR_MISMATCH_IMMEDIATE": os.getenv("MAIL_VENDOR_MISMATCH_IMMEDIATE", "0"),
+    "MAIL_SUMMARY_ATTACH_MB": os.getenv("MAIL_SUMMARY_ATTACH_MB", "3"),
+    "MAIL_MAX_SUMMARY_IMAGES": os.getenv("MAIL_MAX_SUMMARY_IMAGES", "30"),
+    "INSIGHTZZ_RECIPIENTS": os.getenv("INSIGHTZZ_RECIPIENTS", ""),
+    "INSIGHTZZ_REPORT_TIME": os.getenv("INSIGHTZZ_REPORT_TIME", "08:00"),
 
     # Database
     "DB_HOST": os.getenv("DB_HOST"),

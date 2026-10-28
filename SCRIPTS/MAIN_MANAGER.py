@@ -37,6 +37,7 @@ from DEPENDANT.LOGGING import initializeLogger
 from DEPENDANT.VEHICLE_HOOKS import (
     on_new_vehicle, resolve_pdf_url,
     on_inspection_complete, on_cycle_blocked,
+    on_session_closed,
 )
 
 from LOGIC import (
@@ -1270,6 +1271,83 @@ class Manager:
             logger.error(f"{traceback.format_exc()}")
             return None
 
+    def _freeze_ai_images(self) -> list:
+        """
+        Keep the CAM1 frames of the most recent AI check for the attempt that
+        just failed (AI_OBSTRUCTION or HARD_MATERIAL) and record them as
+        sample_info['attempts'][-1]['ai_images'] = [{check, raw, vis}].
+
+          raw : CAM1_loopN_precycle.jpg      - the frame the model ran on
+          vis : CAM1_loopN_precycle_vis.jpg  - same frame with the yellow ROI,
+                                               detections and verdict drawn
+
+        AI block      -> the LAST failed check (the one that decided the block)
+        Hard material -> the check that passed before this cycle started, so
+                         the mail shows what the model accepted as coal at the
+                         spot where the auger then hit hard material
+
+        Only one raw+vis pair is kept: with the CAM3 snapshot that makes the
+        3 pictures per block that go into the alert and summary mails.
+
+        Files are only taken if written by the current check (mtime after the
+        check started, minus the TEMP frame age allowance), so a capture
+        failure can't pass off older pictures as this one's.
+        The next AI check overwrites INF/<date>/<uid>/CAM1_loopN_precycle*.jpg,
+        which is why they are copied out here. Never raises.
+        """
+        try:
+            attempts = (self._sample_info or {}).get("attempts") or []
+            if not attempts:
+                return []
+            attempt = attempts[-1]
+            reason  = attempt.get("reason")
+            if reason not in ("AI_OBSTRUCTION", "HARD_MATERIAL"):
+                return []
+            seq = attempt.get("seq")
+
+            inf_dir = os.path.join(INF_IMG, self.date_file, self.uid)
+            out_dir = os.path.join(RESULT_IMG_PATH, self.date_file, str(self.uid), "ATTEMPTS")
+            os.makedirs(out_dir, exist_ok=True)
+
+            since = getattr(self, "_ai_check_started", 0) - (TEMP_IMG_MAX_AGE + 3)
+
+            # Newest check first - the last one written is the one that decided
+            chosen = None
+            for n in range(AI_CONFIRM_RETRIES, 0, -1):
+                raw = os.path.join(inf_dir, f"CAM1_loop{n}_precycle.jpg")
+                vis = os.path.join(inf_dir, f"CAM1_loop{n}_precycle_vis.jpg")
+                fresh = [p for p in (raw, vis)
+                         if os.path.exists(p) and os.path.getmtime(p) >= since]
+                if fresh:
+                    chosen = (n, raw if raw in fresh else None, vis if vis in fresh else None)
+                    break
+
+            if not chosen:
+                print(f"[MANAGER] {reason} #{seq}: no CAM1 check frames found to keep")
+                logger.warning(f"{reason} #{seq}: no CAM1 check frames found in {inf_dir}")
+                return []
+
+            n, raw, vis = chosen
+            entry = {"check": n}
+            for kind, src in (("raw", raw), ("vis", vis)):
+                if not src:
+                    continue
+                suffix = "_vis" if kind == "vis" else ""
+                dest = os.path.join(out_dir, f"{self.uid}_a{seq}_{reason}_CAM1{suffix}.jpg")
+                shutil.copy2(src, dest)
+                entry[kind] = normalize_path(dest)
+
+            attempt["ai_images"] = [entry]
+            if self.uid:
+                db_update_sample_info(self.uid, self._sample_info)
+            print(f"[MANAGER] {reason} #{seq}: kept CAM1 frames of AI check {n}")
+            logger.debug(f"{reason} #{seq} CAM1 frames: {entry}")
+            return [entry]
+
+        except Exception:
+            logger.error(f"{traceback.format_exc()}")
+            return []
+
     def _set_live_target(self, pos: dict | None):
         """
         Publish the point the auger is heading to, so the dashboard can blink
@@ -1874,11 +1952,18 @@ class Manager:
  
             confirmed = True
             if AI_CONFIRM_ENABLED and self.ai_model:
+                # Lets _freeze_ai_images() tell THIS check's CAM1 frames from
+                # the previous check's files of the same name.
+                self._ai_check_started = time.time()
                 confirmed = self._confirm_position_before_start(pos["area"])
  
             if not confirmed:
                 # ── AI could not see the auger / coal clearly ────────────────
                 self._record_attempt(pos, "FAILED", "AI_OBSTRUCTION")
+                # Keep the CAM1 frames the model judged - the next AI check
+                # overwrites INF/<date>/<uid>/CAM1_loopN_precycle*.jpg. They
+                # go into the end-of-session summary mail with the CAM3 snapshot.
+                self._freeze_ai_images()
                 self._ai_blocked_pos = self.positions.pop()   # discard this point
                 self._ai_block_count += 1
 
@@ -2060,6 +2145,9 @@ class Manager:
  
             bad = self.positions.pop()
             self._record_attempt(bad, "FAILED", "HARD_MATERIAL")
+            # CAM1 frames of the AI check that cleared this point - mailed
+            # with the hard-material alert next to the CAM3 snapshot.
+            self._freeze_ai_images()
  
             print(f"[MANAGER] HARD MATERIAL at {bad} — cycle {self.cycle} NOT counted "
                   f"(consecutive {self._consecutive_hard}/{HARD_MATERIAL_CONSECUTIVE_LIMIT})")
@@ -2321,6 +2409,22 @@ class Manager:
         # Signal RFID reader to resume reading
         self.mqtt.publish("rfid/control", {"action": "cycle_reset"})
         self._mark_cycle_end()
+
+        # A session that ends on an ERROR still gets its one summary mail if
+        # it had a vendor mismatch / AI block / hard material. Completed
+        # sessions were already mailed from _handle_complete (deduped per UID).
+        if msg != "":
+            try:
+                on_session_closed(
+                    uid=self.uid,
+                    vehicle=self.vehicle,
+                    rfids=self.rfids,
+                    bucket_no=self.bucket_no,
+                    sample_info=self._sample_info,
+                    error_message=msg,
+                )
+            except Exception:
+                logger.error(f"{traceback.format_exc()}")
         
         self.uid       = None
         self.rfids     = []
