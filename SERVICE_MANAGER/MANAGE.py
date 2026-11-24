@@ -29,6 +29,7 @@ SERVICES = {
     "Health Monitor": fr"{BASE_FILE_PATH}SCRIPTS\\HEALTH_STATUS.py",
     "PDF Sync": fr"{BASE_FILE_PATH}SCRIPTS\\FILL_VEHICLES.py",
     "Daily Report": fr"{BASE_FILE_PATH}SCRIPTS\\DAILY_REPORT.py",
+    "Auto Cleanup": fr"{BASE_FILE_PATH}SCRIPTS\\AUTO_CLEANUP.py",
     # "TEST": fr"{BASE_FILE_PATH}SCRIPTS\\TEST.py",
     # "Algorithm": fr"{BASE_FILE_PATH}SCRIPTS\ALGORITHM.py",
     "Django": fr"{BASE_FILE_PATH}WEB_APP\\manage.py runserver"
@@ -93,6 +94,10 @@ SERVICE_ENV = {
     "DAILY_REPORT_TIME": os.getenv("DAILY_REPORT_TIME", "08:00"),
     "WEEKLY_SYNC_DAY": os.getenv("WEEKLY_SYNC_DAY", "monday"),
     "WEEKLY_SYNC_TIME": os.getenv("WEEKLY_SYNC_TIME", "06:00"),
+
+    # Auto cleanup (AUTO_CLEANUP.py): daily delete of files older than N days
+    "AUTO_CLEANUP_TIME": os.getenv("AUTO_CLEANUP_TIME", "23:00"),
+    "AUTO_CLEANUP_DAYS": os.getenv("AUTO_CLEANUP_DAYS", "7"),
 }
 
 # BASE_FILE_PATH = "/home/deepali/OMKAR/CODES/COAL_SAMPLING/COAL_SAMPLING/"
